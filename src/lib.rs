@@ -22,6 +22,8 @@
 
 // --------------------------------------------------------------------------
 
+extern mod extra;
+
 use std::libc::{c_int, mode_t, dev_t, size_t, off_t};
 use std::libc::ENOSYS;
 
@@ -253,6 +255,7 @@ mod argument;
 mod channel;
 mod native;
 mod request;
+mod reply;
 mod sendable;
 mod session;
 
