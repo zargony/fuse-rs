@@ -15,7 +15,7 @@ use channel::{FusePort,FuseChan};
 use Filesystem;
 use argument::ArgumentIterator;
 use super::logstr;
-use request::new_request;
+use request::{Request, new_request, new_request_with_handler, send_reply};
 
 #[cfg(target_os = "macos")]
 /// We support async reads and our filesystems are usually case-insensitive
@@ -151,15 +151,14 @@ impl<FS: Filesystem+Send> Session<FS> {
 			FUSE_INTERRUPT => {
 				let arg: &fuse_interrupt_in = data.fetch();
 				debug!("INTERRUPT({:u}) unique {:u}", header.unique, arg.unique);
-				// TODO: handle FUSE_INTERRUPT
-				self.send_reply_error(header.unique, ENOSYS);
+				self.filesystem.interrupt(header.unique);
 			},
 
 			FUSE_LOOKUP => {
 				let name = data.fetch_str();
 				debug!("LOOKUP({:u}) parent {:#018x}, name {:s}", header.unique, header.nodeid, logstr(name));
-				let res = self.filesystem.lookup(header.nodeid, name);
-				self.send_reply(header.unique, res);
+				let req = self.new_request(header);
+				self.filesystem.lookup(req, header.nodeid, name);
 			},
 			FUSE_FORGET => {
 				let arg: &fuse_forget_in = data.fetch();
@@ -168,139 +167,139 @@ impl<FS: Filesystem+Send> Session<FS> {
 			},
 			FUSE_GETATTR => {
 				debug!("GETATTR({:u}) ino {:#018x}", header.unique, header.nodeid);
-				let res = self.filesystem.getattr(header.nodeid);
-				self.send_reply(header.unique, res);
+				let req = self.new_request(header);
+				self.filesystem.getattr(req, header.nodeid);
 			},
 			FUSE_SETATTR => {
 				let arg: &fuse_setattr_in = data.fetch();
 				debug!("SETATTR({:u}) ino {:#018x}, valid {:#x}", header.unique, header.nodeid, arg.valid);
-				let res = self.filesystem.setattr(header.nodeid, arg);
-				self.send_reply(header.unique, res);
+				let req = self.new_request(header);
+				self.filesystem.setattr(req, header.nodeid, arg);
 			},
 			FUSE_READLINK => {
 				debug!("READLINK({:u}) ino {:#018x}", header.unique, header.nodeid);
-				let res = self.filesystem.readlink(header.nodeid);
-				self.send_reply(header.unique, res);
+				let req = self.new_request(header);
+				self.filesystem.readlink(req, header.nodeid);
 			},
 			FUSE_MKNOD => {
 				let arg: &fuse_mknod_in = data.fetch();
 				let name = data.fetch_str();
 				debug!("MKNOD({:u}) parent {:#018x}, name {:s}, mode {:#05o}, rdev {:u}", header.unique, header.nodeid, logstr(name), arg.mode, arg.rdev);
-				let res = self.filesystem.mknod(header.nodeid, name, arg.mode as mode_t, arg.rdev as dev_t);
-				self.send_reply(header.unique, res);
+				let req = self.new_request(header);
+				self.filesystem.mknod(req, header.nodeid, name, arg.mode as mode_t, arg.rdev as dev_t);
 			},
 			FUSE_MKDIR => {
 				let arg: &fuse_mkdir_in = data.fetch();
 				let name = data.fetch_str();
 				debug!("MKDIR({:u}) parent {:#018x}, name {:s}, mode {:#05o}", header.unique, header.nodeid, logstr(name), arg.mode);
-				let res = self.filesystem.mkdir(header.nodeid, name, arg.mode as mode_t);
-				self.send_reply(header.unique, res);
+				let req = self.new_request(header);
+				self.filesystem.mkdir(req, header.nodeid, name, arg.mode as mode_t);
 			},
 			FUSE_UNLINK => {
 				let name = data.fetch_str();
 				debug!("UNLINK({:u}) parent {:#018x}, name {:s}", header.unique, header.nodeid, logstr(name));
-				let res = self.filesystem.unlink(header.nodeid, name);
-				self.send_reply(header.unique, res);
+				let req = self.new_request(header);
+				self.filesystem.unlink(req, header.nodeid, name);
 			},
 			FUSE_RMDIR => {
 				let name = data.fetch_str();
 				debug!("RMDIR({:u}) parent {:#018x}, name {:s}", header.unique, header.nodeid, logstr(name));
-				let res = self.filesystem.rmdir(header.nodeid, name);
-				self.send_reply(header.unique, res);
+				let req = self.new_request(header);
+				self.filesystem.rmdir(req, header.nodeid, name);
 			},
 			FUSE_SYMLINK => {
 				let name = data.fetch_str();
 				let link = data.fetch_str();
 				debug!("SYMLINK({:u}) parent {:#018x}, name {:s}, link {:s}", header.unique, header.nodeid, logstr(name), logstr(link));
-				let res = self.filesystem.symlink(header.nodeid, name, link);
-				self.send_reply(header.unique, res);
+				let req = self.new_request(header);
+				self.filesystem.symlink(req, header.nodeid, name, link);
 			},
 			FUSE_RENAME => {
 				let arg: &fuse_rename_in = data.fetch();
 				let name = data.fetch_str();
 				let newname = data.fetch_str();
 				debug!("RENAME({:u}) parent {:#018x}, name {:s}, newparent {:#018x}, newname {:s}", header.unique, header.nodeid, logstr(name), arg.newdir, logstr(newname));
-				let res = self.filesystem.rename(header.nodeid, name, arg.newdir, newname);
-				self.send_reply(header.unique, res);
+				let req = self.new_request(header);
+				self.filesystem.rename(req, header.nodeid, name, arg.newdir, newname);
 			},
 			FUSE_LINK => {
 				let arg: &fuse_link_in = data.fetch();
 				let newname = data.fetch_str();
 				debug!("LINK({:u}) ino {:#018x}, newparent {:#018x}, newname {:s}", header.unique, arg.oldnodeid, header.nodeid, logstr(newname));
-				let res = self.filesystem.link(arg.oldnodeid, header.nodeid, newname);
-				self.send_reply(header.unique, res);
+				let req = self.new_request(header);
+				self.filesystem.link(req, arg.oldnodeid, header.nodeid, newname);
 			},
 			FUSE_OPEN => {
 				let arg: &fuse_open_in = data.fetch();
 				debug!("OPEN({:u}) ino {:#018x}, flags {:#x}", header.unique, header.nodeid, arg.flags);
-				let res = self.filesystem.open(header.nodeid, arg.flags as uint);
-				self.send_reply(header.unique, res);
+				let req = self.new_request(header);
+				self.filesystem.open(req, header.nodeid, arg.flags as uint);
 			},
 			FUSE_READ => {
 				let arg: &fuse_read_in = data.fetch();
 				debug!("READ({:u}) ino {:#018x}, fh {:u}, offset {:u}, size {:u}", header.unique, header.nodeid, arg.fh, arg.offset, arg.size);
-				let res = self.filesystem.read(header.nodeid, arg.fh, arg.offset as off_t, arg.size as size_t);
-				self.send_reply(header.unique, res);
+				let req = self.new_request(header);
+				self.filesystem.read(req, header.nodeid, arg.fh, arg.offset as off_t, arg.size as size_t);
 			},
 			FUSE_WRITE => {
 				let arg: &fuse_write_in = data.fetch();
 				let data = data.fetch_data();
 				assert!(data.len() == arg.size as uint);
 				debug!("WRITE({:u}) ino {:#018x}, fh {:u}, offset {:u}, size {:u}, flags {:#x}", header.unique, header.nodeid, arg.fh, arg.offset, arg.size, arg.write_flags);
-				let res = self.filesystem.write(header.nodeid, arg.fh, arg.offset as off_t, data, arg.write_flags as uint).and_then(|written| {
-					Ok(~fuse_write_out { size: written as u32, padding: 0 })
-				});
-				self.send_reply(header.unique, res);
+				let req = do new_request_with_handler::<size_t>(self.chan.clone(), header.unique) |chan, unique, result| {
+					send_reply(chan, unique, result.map(|written| ~fuse_write_out { size: written as u32, padding: 0 }))
+				};
+				self.filesystem.write(req, header.nodeid, arg.fh, arg.offset as off_t, data, arg.write_flags as uint);
 			},
 			FUSE_FLUSH => {
 				let arg: &fuse_flush_in = data.fetch();
 				debug!("FLUSH({:u}) ino {:#018x}, fh {:u}, lock owner {:u}", header.unique, header.nodeid, arg.fh, arg.lock_owner);
-				let res = self.filesystem.flush(header.nodeid, arg.fh, arg.lock_owner);
-				self.send_reply(header.unique, res);
+				let req = self.new_request(header);
+				self.filesystem.flush(req, header.nodeid, arg.fh, arg.lock_owner);
 			},
 			FUSE_RELEASE => {
 				let arg: &fuse_release_in = data.fetch();
 				let flush = match arg.release_flags & FUSE_RELEASE_FLUSH { 0 => false, _ => true };
 				debug!("RELEASE({:u}) ino {:#018x}, fh {:u}, flags {:#x}, release flags {:#x}, lock owner {:u}", header.unique, header.nodeid, arg.fh, arg.flags, arg.release_flags, arg.lock_owner);
-				let res = self.filesystem.release(header.nodeid, arg.fh, arg.flags as uint, arg.lock_owner, flush);
-				self.send_reply(header.unique, res);
+				let req = self.new_request(header);
+				self.filesystem.release(req, header.nodeid, arg.fh, arg.flags as uint, arg.lock_owner, flush);
 			},
 			FUSE_FSYNC => {
 				let arg: &fuse_fsync_in = data.fetch();
 				let datasync = match arg.fsync_flags & 1 { 0 => false, _ => true };
 				debug!("FSYNC({:u}) ino {:#018x}, fh {:u}, flags {:#x}", header.unique, header.nodeid, arg.fh, arg.fsync_flags);
-				let res = self.filesystem.fsync(header.nodeid, arg.fh, datasync);
-				self.send_reply(header.unique, res);
+				let req = self.new_request(header);
+				self.filesystem.fsync(req, header.nodeid, arg.fh, datasync);
 			},
 			FUSE_OPENDIR => {
 				let arg: &fuse_open_in = data.fetch();
 				debug!("OPENDIR({:u}) ino {:#018x}, flags {:#x}", header.unique, header.nodeid, arg.flags);
-				let res = self.filesystem.opendir(header.nodeid, arg.flags as uint);
-				self.send_reply(header.unique, res);
+				let req = self.new_request(header);
+				self.filesystem.opendir(req, header.nodeid, arg.flags as uint);
 			},
 			FUSE_READDIR => {
 				let arg: &fuse_read_in = data.fetch();
 				debug!("READDIR({:u}) ino {:#018x}, fh {:u}, offset {:u}, size {:u}", header.unique, header.nodeid, arg.fh, arg.offset, arg.size);
-				let res = self.filesystem.readdir(header.nodeid, arg.fh, arg.offset as off_t, DirBuffer::new(arg.size as uint));
-				self.send_reply(header.unique, res);
+				let req = self.new_request(header);
+				self.filesystem.readdir(req, header.nodeid, arg.fh, arg.offset as off_t, DirBuffer::new(arg.size as uint));
 			},
 			FUSE_RELEASEDIR => {
 				let arg: &fuse_release_in = data.fetch();
 				debug!("RELEASEDIR({:u}) ino {:#018x}, fh {:u}, flags {:#x}, release flags {:#x}, lock owner {:u}", header.unique, header.nodeid, arg.fh, arg.flags, arg.release_flags, arg.lock_owner);
-				let res = self.filesystem.releasedir(header.nodeid, arg.fh, arg.flags as uint);
-				self.send_reply(header.unique, res);
+				let req = self.new_request(header);
+				self.filesystem.releasedir(req, header.nodeid, arg.fh, arg.flags as uint);
 			},
 			FUSE_FSYNCDIR => {
 				let arg: &fuse_fsync_in = data.fetch();
 				let datasync = match arg.fsync_flags & 1 { 0 => false, _ => true };
 				debug!("FSYNCDIR({:u}) ino {:#018x}, fh {:u}, flags {:#x}", header.unique, header.nodeid, arg.fh, arg.fsync_flags);
-				let res = self.filesystem.fsyncdir(header.nodeid, arg.fh, datasync);
-				self.send_reply(header.unique, res);
+				let req = self.new_request(header);
+				self.filesystem.fsyncdir(req, header.nodeid, arg.fh, datasync);
 			},
 			FUSE_STATFS => {
 				debug!("STATFS({:u}) ino {:#018x}", header.unique, header.nodeid);
-				let res = self.filesystem.statfs(header.nodeid);
-				self.send_reply(header.unique, res);
+				let req = self.new_request(header);
+				self.filesystem.statfs(req, header.nodeid);
 			},
 			FUSE_SETXATTR => {
 				let arg: &fuse_setxattr_in = data.fetch();
@@ -312,69 +311,75 @@ impl<FS: Filesystem+Send> Session<FS> {
 				fn get_position(arg: &fuse_setxattr_in) -> off_t { arg.position as off_t }
 				#[cfg(not(target_os = "macos"))]
 				fn get_position(_arg: &fuse_setxattr_in) -> off_t { 0 }
-				let res = self.filesystem.setxattr(header.nodeid, name, value, arg.flags as uint, get_position(arg));
-				self.send_reply(header.unique, res);
+				let req = self.new_request(header);
+				self.filesystem.setxattr(req, header.nodeid, name, value, arg.flags as uint, get_position(arg));
 			},
 			FUSE_GETXATTR => {
 				let arg: &fuse_getxattr_in = data.fetch();
 				let name = data.fetch_str();
 				debug!("GETXATTR({:u}) ino {:#018x}, name {:s}, size {:u}", header.unique, header.nodeid, logstr(name), arg.size);
-				match self.filesystem.getxattr(header.nodeid, name) {
-					// If arg.size is zero, the size of the value should be sent with fuse_getxattr_out
-					Ok(ref value) if arg.size == 0 => self.send_reply(header.unique, Ok(fuse_getxattr_out { size: value.len() as u32, padding: 0 })),
-					// If arg.size is non-zero, send the value if it fits, or ERANGE otherwise
-					Ok(ref value) if value.len() > arg.size as uint => self.send_reply_error(header.unique, ERANGE),
-					Ok(value) => self.send_reply(header.unique, Ok(value)),
-					Err(err) => self.send_reply_error(header.unique, err),
-				}
+				let size = arg.size as uint;
+				let req = do new_request_with_handler::<~[u8]>(self.chan.clone(), header.unique) |chan, unique, result| {
+					if size == 0 {
+						send_reply(chan, unique, result.map(|value| fuse_getxattr_out { size: value.len() as u32, padding: 0 }));
+					} else {
+						let reply_result = do result.and_then |value| { 
+							if value.len() > size {
+								Err(ERANGE)
+							} else { Ok(value) }
+						};
+						send_reply(chan, unique, reply_result);
+					}
+				};
+				self.filesystem.getxattr(req, header.nodeid, name);
 			},
 			FUSE_LISTXATTR => {
 				let arg: &fuse_getxattr_in = data.fetch();
 				debug!("LISTXATTR({:u}) ino {:#018x}, size {:u}", header.unique, header.nodeid, arg.size);
-				match self.filesystem.listxattr(header.nodeid) {
+				let req = do new_request_with_handler::<~[&[u8]]>(self.chan.clone(), header.unique) |chan, unique, _list| {
 					// TODO: If arg.size is zero, the size of the attribute list should be sent with fuse_getxattr_out
 					// TODO: If arg.size is non-zero, send the attribute list if it fits, or ERANGE otherwise
-					Ok(_) => self.send_reply_error(header.unique, ENOSYS),
-					Err(err) => self.send_reply_error(header.unique, err),
-				}
+					send_reply(chan, unique, Err::<(),c_int>(ENOSYS))
+				};
+				self.filesystem.listxattr(req, header.nodeid);
 			},
 			FUSE_REMOVEXATTR => {
 				let name = data.fetch_str();
 				debug!("REMOVEXATTR({:u}) ino {:#018x}, name {:s}", header.unique, header.nodeid, logstr(name));
-				let res = self.filesystem.removexattr(header.nodeid, name);
-				self.send_reply(header.unique, res);
+				let req = self.new_request(header);
+				self.filesystem.removexattr(req, header.nodeid, name);
 			},
 			FUSE_ACCESS => {
 				let arg: &fuse_access_in = data.fetch();
 				debug!("ACCESS({:u}) ino {:#018x}, mask {:#05o}", header.unique, header.nodeid, arg.mask);
-				let res = self.filesystem.access(header.nodeid, arg.mask as uint);
-				self.send_reply(header.unique, res);
+				let req = self.new_request(header);
+				self.filesystem.access(req, header.nodeid, arg.mask as uint);
 			},
 			FUSE_CREATE => {
 				let arg: &fuse_open_in = data.fetch();
 				let name = data.fetch_str();
 				debug!("CREATE({:u}) parent {:#018x}, name {:s}, mode {:#05o}, flags {:#x}", header.unique, header.nodeid, logstr(name), arg.mode, arg.flags);
-				let res = self.filesystem.create(header.nodeid, name, arg.mode as mode_t, arg.flags as uint);
-				self.send_reply(header.unique, res);
+				let req = self.new_request(header);
+				self.filesystem.create(req, header.nodeid, name, arg.mode as mode_t, arg.flags as uint);
 			},
 			FUSE_GETLK => {
 				let arg: &fuse_lk_in = data.fetch();
 				debug!("GETLK({:u}) ino {:#018x}, fh {:u}, lock owner {:u}", header.unique, header.nodeid, arg.fh, arg.owner);
-				let res = self.filesystem.getlk(header.nodeid, arg.fh, arg.owner, &arg.lk);
-				self.send_reply(header.unique, res);
+				let req = self.new_request(header);
+				self.filesystem.getlk(req, header.nodeid, arg.fh, arg.owner, &arg.lk);
 			},
 			FUSE_SETLK | FUSE_SETLKW => {
 				let arg: &fuse_lk_in = data.fetch();
 				let sleep = match opcode { FUSE_SETLKW => true, _ => false };
 				debug!("SETLK({:u}) ino {:#018x}, fh {:u}, lock owner {:u}", header.unique, header.nodeid, arg.fh, arg.owner);
-				let res = self.filesystem.setlk(header.nodeid, arg.fh, arg.owner, &arg.lk, sleep);
-				self.send_reply(header.unique, res);
+				let req = self.new_request(header);
+				self.filesystem.setlk(req, header.nodeid, arg.fh, arg.owner, &arg.lk, sleep);
 			},
 			FUSE_BMAP => {
 				let arg: &fuse_bmap_in = data.fetch();
 				debug!("BMAP({:u}) ino {:#018x}, blocksize {:u}, ids {:u}", header.unique, header.nodeid, arg.blocksize, arg.block);
-				let res = self.filesystem.bmap(header.nodeid, arg.blocksize as size_t, arg.block);
-				self.send_reply(header.unique, res);
+				let req = self.new_request(header);
+				self.filesystem.bmap(req, header.nodeid, arg.blocksize as size_t, arg.block);
 			},
             // OS X only
             FUSE_SETVOLNAME | FUSE_EXCHANGE | FUSE_GETXTIMES => self.dispatch_macos_only(opcode, header, &mut data),
@@ -388,21 +393,21 @@ impl<FS: Filesystem+Send> Session<FS> {
 			FUSE_SETVOLNAME => {
 				let name = data.fetch_str();
 				debug!("SETVOLNAME({:u}) name {:s}", header.unique, logstr(name));
-				let res = self.filesystem.setvolname(name);
-				self.send_reply(header.unique, res);
+				let req = self.new_request(header);
+				self.filesystem.setvolname(req, name);
 			},
 			FUSE_EXCHANGE => {
 				let arg: &fuse_exchange_in = data.fetch();
 				let oldname = data.fetch_str();
 				let newname = data.fetch_str();
 				debug!("EXCHANGE({:u}) parent {:#018x}, name {:s}, newparent {:#018x}, newname {:s}, options {:#x}", header.unique, arg.olddir, logstr(oldname), arg.newdir, logstr(newname), arg.options);
-				let res = self.filesystem.exchange(arg.olddir, oldname, arg.newdir, newname, arg.options as uint);
-				self.send_reply(header.unique, res);
+				let req = self.new_request(header);
+				self.filesystem.exchange(req, arg.olddir, oldname, arg.newdir, newname, arg.options as uint);
 			},
 			FUSE_GETXTIMES => {
 				debug!("GETXTIMES({:u}) ino {:#018x}", header.unique, header.nodeid);
-				let res = self.filesystem.getxtimes(header.nodeid);
-				self.send_reply(header.unique, res);
+				let req = self.new_request(header);
+				self.filesystem.getxtimes(req, header.nodeid);
 			},
             _ => unreachable!(),
 		}
@@ -414,6 +419,10 @@ impl<FS: Filesystem+Send> Session<FS> {
         warn!("Ignoring unsupported FUSE operation {:u}", header.opcode);
         self.send_reply_error(header.unique, ENOSYS);
     }
+
+	fn new_request<T:Sendable+Send>(&mut self, header: &fuse_in_header) -> Request<T> {
+		new_request::<T>(self.chan.clone(), header.unique)
+	}
 
 	fn send_reply_error(&self, unique: u64, err:c_int) {
 		self.send_reply::<()>(unique, Err(err));
