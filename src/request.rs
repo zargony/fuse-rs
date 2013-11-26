@@ -3,391 +3,78 @@
  * wants us to perform.
  */
 
-use std::{mem, vec};
-use std::libc::{dev_t, c_int, mode_t, off_t, size_t};
-use std::libc::{EIO, ENOSYS, EPROTO, ERANGE};
-use argument::ArgumentIterator;
-use channel::Channel;
-use Filesystem;
-use native::*;
-use native::consts::*;
-use sendable::{Sendable, DirBuffer};
-use session::Session;
-use super::logstr;
+use std::libc::{c_int, EIO};
+use channel::FuseChan;
+use reply::{reply_token, Reply};
+use sendable::{Sendable};
+use std::task;
 
-/// Maximum write size. FUSE recommends at least 128k, max 16M. Default on OS X is 16M.
-static MAX_WRITE_SIZE: u32 = 16*1024*1024;
+/// Function to handle replies to requests
+pub type ReplyHandler<T> = proc(&FuseChan, u64, Result<T, c_int>);
 
-/// Size of the buffer for reading a request from the kernel. Since the kernel may send
-/// up to MAX_WRITE_SIZE bytes in a write request, we use that value plus some extra space.
-static BUFFER_SIZE: uint = MAX_WRITE_SIZE as uint + 4096;
-
-#[cfg(target_os = "macos")]
-/// We support async reads and our filesystems are usually case-insensitive
-/// TODO: should case sensitivity be an option passable by the implementing FS?
-static INIT_FLAGS: u32 = FUSE_ASYNC_READ | FUSE_CASE_INSENSITIVE;
-
-#[cfg(not(target_os = "macos"))]
-/// We support async reads
-static INIT_FLAGS: u32 = FUSE_ASYNC_READ;
-
-/// Request data structure
-pub struct Request {
-	priv data: ~[u8],
+/// Each filesystem operation has its own Request object, which must be used to get a Reply.
+pub struct Request<T> {
+	priv chan: FuseChan,
+	priv unique: u64,
+	replied: bool,
+	priv reply_handler: Option<ReplyHandler<T>>
 }
 
-impl Request {
-	/// Create a new request
-	pub fn new () -> Request {
-		Request { data: vec::with_capacity(BUFFER_SIZE) }
+impl<T> Request<T> {
+	/// Reply to a filesystem operation synchronously.  The reply is sent immediately--when this
+	/// function returns, it has already been read and sent to the kernel.
+	pub fn reply(mut self, result: Result<T, c_int>) -> Reply {
+		self.reply_handler.take_unwrap()(&self.chan, self.unique, result);
+		self.replied = true;
+		reply_token()
 	}
 
-	/// Read the next request from the given channel to kernel driver
-	pub fn read<FS: Filesystem> (&mut self, se: &Session<FS>) -> Result<(), c_int> {
-		assert!(self.data.capacity() >= BUFFER_SIZE);
-		// The kernel driver makes sure that we get exactly one request per read
-		let res = se.ch.receive(&mut self.data);
-		if res.is_ok() && self.data.len() < mem::size_of::<fuse_in_header>() {
-			error!("Short read on FUSE device");
-			Err(EIO)
-		} else {
-			res
+	/// Reply to a filesystem operation asynchronously.  A new task is spawned, with the scheduler
+	/// as specified by `sched_mode`, to run the passed function.  The passed function must reply to
+	/// the operation, and is given the request object to allow it to do so.
+	pub fn reply_async(self, sched_mode: task::SchedMode, func: proc(req: Request<T>) -> Reply) -> Reply {
+		let mut builder = task::task();
+		builder.sched_mode(sched_mode);
+		builder.spawn(|| { func(self); });
+		reply_token()
+	}
+
+	/// Return a unique key that identifies this request.  This key is used when calling `interrupt`
+	/// to indicate which request is being interrupted.  Note that the uniqueness of this value is
+	/// only over _active_ requests.  After a reply has been sent for a request, the same "unique"
+	/// value may be used for an unrelated subsequent request in the same session.
+	pub fn unique(&self) -> u64 { self.unique }
+}
+
+#[unsafe_destructor]
+impl<T> Drop for Request<T> {
+	fn drop(&mut self) {
+		if !self.replied {
+			// The request fell out of scope without calling `reply`--probably due to failure.  Pass
+			// an error back to the kernel to avoid a hanging i/o operation.
+			error!("FS request({:u}) dropped without reply.  Sending error", self.unique);
+			send_reply::<()>(&self.chan, self.unique, Err(EIO));
 		}
 	}
+}
 
-	/// Dispatch request to the given filesystem.
-	/// This parses a previously read request, calls the appropriate
-	/// filesystem operation method and sends back the returned reply
-	/// to the kernel
-	pub fn dispatch<FS: Filesystem> (&self, se: &mut Session<FS>) {
-		// Every request begins with a fuse_in_header struct followed by arbitrary
-		// data depending on which opcode it contains
-		assert!(self.data.len() >= mem::size_of::<fuse_in_header>());
-		let mut data = ArgumentIterator::new(self.data);
-		let header: &fuse_in_header = data.fetch();
-		let ch = se.ch;
-		let opcode: fuse_opcode = match FromPrimitive::from_u32(header.opcode) {
-			Some(op) => op,
-			None => {
-				warn!("Ignoring unknown FUSE operation {:u}", header.opcode)
-				self.reply_error(ch, ENOSYS);
-				return;
-			},
-		};
-		match opcode {
-			// Filesystem initialization
-			FUSE_INIT => {
-				let arg: &fuse_init_in = data.fetch();
-				debug!("INIT({:u})   kernel: ABI {:u}.{:u}, flags {:#x}, max readahead {:u}", header.unique, arg.major, arg.minor, arg.flags, arg.max_readahead);
-				// We don't support ABI versions before 7.6
-				if arg.major < 7 || (arg.major < 7 && arg.minor < 6) {
-					error!("Unsupported FUSE ABI version {:u}.{:u}", arg.major, arg.minor);
-					self.reply_error(ch, EPROTO);
-					return;
-				}
-				// Remember ABI version supported by kernel
-				se.proto_major = arg.major as uint;
-				se.proto_minor = arg.minor as uint;
-				// Call filesystem init method and give it a chance to return an error
-				let res = se.filesystem.init();
-				if res.is_err() {
-					self.reply_error(ch, res.unwrap_err());
-					return;
-				}
-				// Reply with our desired version and settings. If the kernel supports a
-				// larger major version, it'll re-send a matching init message. If it
-				// supports only lower major versions, we replied with an error above.
-				let reply = fuse_init_out {
-					major: FUSE_KERNEL_VERSION,
-					minor: FUSE_KERNEL_MINOR_VERSION,
-					max_readahead: arg.max_readahead,
-					flags: INIT_FLAGS,
-					unused: 0,
-					max_write: MAX_WRITE_SIZE,
-				};
-				debug!("INIT({:u}) response: ABI {:u}.{:u}, flags {:#x}, max readahead {:u}, max write {:u}", header.unique, reply.major, reply.minor, reply.flags, reply.max_readahead, reply.max_write);
-				se.initialized = true;
-				self.reply(ch, Ok(reply));
-			},
-			// Any operation is invalid before initialization
-			_ if !se.initialized => {
-				warn!("Ignoring FUSE operation {:u} before init", header.opcode);
-				self.reply_error(ch, EIO);
-			},
-			// Filesystem destroyed
-			FUSE_DESTROY => {
-				debug!("DESTROY({:u})", header.unique);
-				se.filesystem.destroy();
-				se.destroyed = true;
-				self.reply(ch, Ok(()));
-			}
-			// Any operation is invalid after destroy
-			_ if se.destroyed => {
-				warn!("Ignoring FUSE operation {:u} after destroy", header.opcode);
-				self.reply_error(ch, EIO);
-			}
-
-			FUSE_INTERRUPT => {
-				let arg: &fuse_interrupt_in = data.fetch();
-				debug!("INTERRUPT({:u}) unique {:u}", header.unique, arg.unique);
-				// TODO: handle FUSE_INTERRUPT
-				self.reply_error(ch, ENOSYS);
-			},
-
-			FUSE_LOOKUP => {
-				let name = data.fetch_str();
-				debug!("LOOKUP({:u}) parent {:#018x}, name {:s}", header.unique, header.nodeid, logstr(name));
-				self.reply(ch, se.filesystem.lookup(header.nodeid, name));
-			},
-			FUSE_FORGET => {
-				let arg: &fuse_forget_in = data.fetch();
-				debug!("FORGET({:u}) ino {:#018x}, nlookup {:u}", header.unique, header.nodeid, arg.nlookup);
-				se.filesystem.forget(header.nodeid, arg.nlookup as uint);	// no reply
-			},
-			FUSE_GETATTR => {
-				debug!("GETATTR({:u}) ino {:#018x}", header.unique, header.nodeid);
-				self.reply(ch, se.filesystem.getattr(header.nodeid));
-			},
-			FUSE_SETATTR => {
-				let arg: &fuse_setattr_in = data.fetch();
-				debug!("SETATTR({:u}) ino {:#018x}, valid {:#x}", header.unique, header.nodeid, arg.valid);
-				self.reply(ch, se.filesystem.setattr(header.nodeid, arg));
-			},
-			FUSE_READLINK => {
-				debug!("READLINK({:u}) ino {:#018x}", header.unique, header.nodeid);
-				self.reply(ch, se.filesystem.readlink(header.nodeid));
-			},
-			FUSE_MKNOD => {
-				let arg: &fuse_mknod_in = data.fetch();
-				let name = data.fetch_str();
-				debug!("MKNOD({:u}) parent {:#018x}, name {:s}, mode {:#05o}, rdev {:u}", header.unique, header.nodeid, logstr(name), arg.mode, arg.rdev);
-				self.reply(ch, se.filesystem.mknod(header.nodeid, name, arg.mode as mode_t, arg.rdev as dev_t));
-			},
-			FUSE_MKDIR => {
-				let arg: &fuse_mkdir_in = data.fetch();
-				let name = data.fetch_str();
-				debug!("MKDIR({:u}) parent {:#018x}, name {:s}, mode {:#05o}", header.unique, header.nodeid, logstr(name), arg.mode);
-				self.reply(ch, se.filesystem.mkdir(header.nodeid, name, arg.mode as mode_t));
-			},
-			FUSE_UNLINK => {
-				let name = data.fetch_str();
-				debug!("UNLINK({:u}) parent {:#018x}, name {:s}", header.unique, header.nodeid, logstr(name));
-				self.reply(ch, se.filesystem.unlink(header.nodeid, name));
-			},
-			FUSE_RMDIR => {
-				let name = data.fetch_str();
-				debug!("RMDIR({:u}) parent {:#018x}, name {:s}", header.unique, header.nodeid, logstr(name));
-				self.reply(ch, se.filesystem.rmdir(header.nodeid, name));
-			},
-			FUSE_SYMLINK => {
-				let name = data.fetch_str();
-				let link = data.fetch_str();
-				debug!("SYMLINK({:u}) parent {:#018x}, name {:s}, link {:s}", header.unique, header.nodeid, logstr(name), logstr(link));
-				self.reply(ch, se.filesystem.symlink(header.nodeid, name, link));
-			},
-			FUSE_RENAME => {
-				let arg: &fuse_rename_in = data.fetch();
-				let name = data.fetch_str();
-				let newname = data.fetch_str();
-				debug!("RENAME({:u}) parent {:#018x}, name {:s}, newparent {:#018x}, newname {:s}", header.unique, header.nodeid, logstr(name), arg.newdir, logstr(newname));
-				self.reply(ch, se.filesystem.rename(header.nodeid, name, arg.newdir, newname));
-			},
-			FUSE_LINK => {
-				let arg: &fuse_link_in = data.fetch();
-				let newname = data.fetch_str();
-				debug!("LINK({:u}) ino {:#018x}, newparent {:#018x}, newname {:s}", header.unique, arg.oldnodeid, header.nodeid, logstr(newname));
-				self.reply(ch, se.filesystem.link(arg.oldnodeid, header.nodeid, newname));
-			},
-			FUSE_OPEN => {
-				let arg: &fuse_open_in = data.fetch();
-				debug!("OPEN({:u}) ino {:#018x}, flags {:#x}", header.unique, header.nodeid, arg.flags);
-				self.reply(ch, se.filesystem.open(header.nodeid, arg.flags as uint));
-			},
-			FUSE_READ => {
-				let arg: &fuse_read_in = data.fetch();
-				debug!("READ({:u}) ino {:#018x}, fh {:u}, offset {:u}, size {:u}", header.unique, header.nodeid, arg.fh, arg.offset, arg.size);
-				self.reply(ch, se.filesystem.read(header.nodeid, arg.fh, arg.offset as off_t, arg.size as size_t));
-			},
-			FUSE_WRITE => {
-				let arg: &fuse_write_in = data.fetch();
-				let data = data.fetch_data();
-				assert!(data.len() == arg.size as uint);
-				debug!("WRITE({:u}) ino {:#018x}, fh {:u}, offset {:u}, size {:u}, flags {:#x}", header.unique, header.nodeid, arg.fh, arg.offset, arg.size, arg.write_flags);
-				self.reply(ch, se.filesystem.write(header.nodeid, arg.fh, arg.offset as off_t, data, arg.write_flags as uint).and_then(|written| {
-					Ok(~fuse_write_out { size: written as u32, padding: 0 })
-				}));
-			},
-			FUSE_FLUSH => {
-				let arg: &fuse_flush_in = data.fetch();
-				debug!("FLUSH({:u}) ino {:#018x}, fh {:u}, lock owner {:u}", header.unique, header.nodeid, arg.fh, arg.lock_owner);
-				self.reply(ch, se.filesystem.flush(header.nodeid, arg.fh, arg.lock_owner));
-			},
-			FUSE_RELEASE => {
-				let arg: &fuse_release_in = data.fetch();
-				let flush = match arg.release_flags & FUSE_RELEASE_FLUSH { 0 => false, _ => true };
-				debug!("RELEASE({:u}) ino {:#018x}, fh {:u}, flags {:#x}, release flags {:#x}, lock owner {:u}", header.unique, header.nodeid, arg.fh, arg.flags, arg.release_flags, arg.lock_owner);
-				self.reply(ch, se.filesystem.release(header.nodeid, arg.fh, arg.flags as uint, arg.lock_owner, flush));
-			},
-			FUSE_FSYNC => {
-				let arg: &fuse_fsync_in = data.fetch();
-				let datasync = match arg.fsync_flags & 1 { 0 => false, _ => true };
-				debug!("FSYNC({:u}) ino {:#018x}, fh {:u}, flags {:#x}", header.unique, header.nodeid, arg.fh, arg.fsync_flags);
-				self.reply(ch, se.filesystem.fsync(header.nodeid, arg.fh, datasync));
-			},
-			FUSE_OPENDIR => {
-				let arg: &fuse_open_in = data.fetch();
-				debug!("OPENDIR({:u}) ino {:#018x}, flags {:#x}", header.unique, header.nodeid, arg.flags);
-				self.reply(ch, se.filesystem.opendir(header.nodeid, arg.flags as uint));
-			},
-			FUSE_READDIR => {
-				let arg: &fuse_read_in = data.fetch();
-				debug!("READDIR({:u}) ino {:#018x}, fh {:u}, offset {:u}, size {:u}", header.unique, header.nodeid, arg.fh, arg.offset, arg.size);
-				self.reply(ch, se.filesystem.readdir(header.nodeid, arg.fh, arg.offset as off_t, DirBuffer::new(arg.size as uint)));
-			},
-			FUSE_RELEASEDIR => {
-				let arg: &fuse_release_in = data.fetch();
-				debug!("RELEASEDIR({:u}) ino {:#018x}, fh {:u}, flags {:#x}, release flags {:#x}, lock owner {:u}", header.unique, header.nodeid, arg.fh, arg.flags, arg.release_flags, arg.lock_owner);
-				self.reply(ch, se.filesystem.releasedir(header.nodeid, arg.fh, arg.flags as uint));
-			},
-			FUSE_FSYNCDIR => {
-				let arg: &fuse_fsync_in = data.fetch();
-				let datasync = match arg.fsync_flags & 1 { 0 => false, _ => true };
-				debug!("FSYNCDIR({:u}) ino {:#018x}, fh {:u}, flags {:#x}", header.unique, header.nodeid, arg.fh, arg.fsync_flags);
-				self.reply(ch, se.filesystem.fsyncdir(header.nodeid, arg.fh, datasync));
-			},
-			FUSE_STATFS => {
-				debug!("STATFS({:u}) ino {:#018x}", header.unique, header.nodeid);
-				self.reply(ch, se.filesystem.statfs(header.nodeid));
-			},
-			FUSE_SETXATTR => {
-				let arg: &fuse_setxattr_in = data.fetch();
-				let name = data.fetch_str();
-				let value = data.fetch_data();
-				assert!(value.len() == arg.size as uint);
-				debug!("SETXATTR({:u}) ino {:#018x}, name {:s}, size {:u}, flags {:#x}", header.unique, header.nodeid, logstr(name), arg.size, arg.flags);
-				#[cfg(target_os = "macos")]
-				fn get_position(arg: &fuse_setxattr_in) -> off_t { arg.position as off_t }
-				#[cfg(not(target_os = "macos"))]
-				fn get_position(_arg: &fuse_setxattr_in) -> off_t { 0 }
-				self.reply(ch, se.filesystem.setxattr(header.nodeid, name, value, arg.flags as uint, get_position(arg)));
-			},
-			FUSE_GETXATTR => {
-				let arg: &fuse_getxattr_in = data.fetch();
-				let name = data.fetch_str();
-				debug!("GETXATTR({:u}) ino {:#018x}, name {:s}, size {:u}", header.unique, header.nodeid, logstr(name), arg.size);
-				match se.filesystem.getxattr(header.nodeid, name) {
-					// If arg.size is zero, the size of the value should be sent with fuse_getxattr_out
-					Ok(ref value) if arg.size == 0 => self.reply(ch, Ok(fuse_getxattr_out { size: value.len() as u32, padding: 0 })),
-					// If arg.size is non-zero, send the value if it fits, or ERANGE otherwise
-					Ok(ref value) if value.len() > arg.size as uint => self.reply_error(ch, ERANGE),
-					Ok(value) => self.reply(ch, Ok(value)),
-					Err(err) => self.reply_error(ch, err),
-				}
-			},
-			FUSE_LISTXATTR => {
-				let arg: &fuse_getxattr_in = data.fetch();
-				debug!("LISTXATTR({:u}) ino {:#018x}, size {:u}", header.unique, header.nodeid, arg.size);
-				match se.filesystem.listxattr(header.nodeid) {
-					// TODO: If arg.size is zero, the size of the attribute list should be sent with fuse_getxattr_out
-					// TODO: If arg.size is non-zero, send the attribute list if it fits, or ERANGE otherwise
-					Ok(_) => self.reply_error(ch, ENOSYS),
-					Err(err) => self.reply_error(ch, err),
-				}
-			},
-			FUSE_REMOVEXATTR => {
-				let name = data.fetch_str();
-				debug!("REMOVEXATTR({:u}) ino {:#018x}, name {:s}", header.unique, header.nodeid, logstr(name));
-				self.reply(ch, se.filesystem.removexattr(header.nodeid, name));
-			},
-			FUSE_ACCESS => {
-				let arg: &fuse_access_in = data.fetch();
-				debug!("ACCESS({:u}) ino {:#018x}, mask {:#05o}", header.unique, header.nodeid, arg.mask);
-				self.reply(ch, se.filesystem.access(header.nodeid, arg.mask as uint));
-			},
-			FUSE_CREATE => {
-				let arg: &fuse_open_in = data.fetch();
-				let name = data.fetch_str();
-				debug!("CREATE({:u}) parent {:#018x}, name {:s}, mode {:#05o}, flags {:#x}", header.unique, header.nodeid, logstr(name), arg.mode, arg.flags);
-				self.reply(ch, se.filesystem.create(header.nodeid, name, arg.mode as mode_t, arg.flags as uint));
-			},
-			FUSE_GETLK => {
-				let arg: &fuse_lk_in = data.fetch();
-				debug!("GETLK({:u}) ino {:#018x}, fh {:u}, lock owner {:u}", header.unique, header.nodeid, arg.fh, arg.owner);
-				self.reply(ch, se.filesystem.getlk(header.nodeid, arg.fh, arg.owner, &arg.lk));
-			},
-			FUSE_SETLK | FUSE_SETLKW => {
-				let arg: &fuse_lk_in = data.fetch();
-				let sleep = match opcode { FUSE_SETLKW => true, _ => false };
-				debug!("SETLK({:u}) ino {:#018x}, fh {:u}, lock owner {:u}", header.unique, header.nodeid, arg.fh, arg.owner);
-				self.reply(ch, se.filesystem.setlk(header.nodeid, arg.fh, arg.owner, &arg.lk, sleep));
-			},
-			FUSE_BMAP => {
-				let arg: &fuse_bmap_in = data.fetch();
-				debug!("BMAP({:u}) ino {:#018x}, blocksize {:u}, ids {:u}", header.unique, header.nodeid, arg.blocksize, arg.block);
-				self.reply(ch, se.filesystem.bmap(header.nodeid, arg.blocksize as size_t, arg.block));
-			},
-			// OS X only
-			FUSE_SETVOLNAME | FUSE_EXCHANGE | FUSE_GETXTIMES => self.dispatch_macos_only(opcode, se, header, ch, &mut data),
-		}
+/// Reply to a request with the given data or error code
+pub fn send_reply<T: Sendable> (ch: &FuseChan, unique: u64, result: Result<T, c_int>) {
+	match result {
+		Ok(reply) => {
+			ch.send(unique, 0, &reply);
+		},
+		Err(err) => {
+			ch.send(unique, -err, &());
+		},
 	}
+}
 
-	/// Handle OS X operation
-	#[cfg(target_os = "macos")]
-	fn dispatch_macos_only<FS: Filesystem> (&self, opcode: fuse_opcode, se: &mut Session<FS>, header: &fuse_in_header, ch: Channel, data: &mut ArgumentIterator) {
-		match opcode {
-			FUSE_SETVOLNAME => {
-				let name = data.fetch_str();
-				debug!("SETVOLNAME({:u}) name {:s}", header.unique, logstr(name));
-				self.reply(ch, se.filesystem.setvolname(name));
-			},
-			FUSE_EXCHANGE => {
-				let arg: &fuse_exchange_in = data.fetch();
-				let oldname = data.fetch_str();
-				let newname = data.fetch_str();
-				debug!("EXCHANGE({:u}) parent {:#018x}, name {:s}, newparent {:#018x}, newname {:s}, options {:#x}", header.unique, arg.olddir, logstr(oldname), arg.newdir, logstr(newname), arg.options);
-				self.reply(ch, se.filesystem.exchange(arg.olddir, oldname, arg.newdir, newname, arg.options as uint));
-			},
-			FUSE_GETXTIMES => {
-				debug!("GETXTIMES({:u}) ino {:#018x}", header.unique, header.nodeid);
-				self.reply(ch, se.filesystem.getxtimes(header.nodeid));
-			},
-			_ => unreachable!(),
-		}
-	}
+/// Create a new request
+pub fn new_request<T:Sendable>(chan:FuseChan, unique:u64) -> Request<T> {
+	new_request_with_handler(chan, unique, send_reply)
+}
 
-	/// Warn about unsupported OS X operation on other os
-	#[cfg(not(target_os = "macos"))]
-	fn dispatch_macos_only<FS: Filesystem> (&self, _opcode: fuse_opcode, _se: &mut Session<FS>, header: &fuse_in_header, ch: Channel, _data: &mut ArgumentIterator) {
-		warn!("Ignoring unsupported FUSE operation {:u}", header.opcode)
-		self.reply_error(ch, ENOSYS);
-	}
-
-	/// Reply to a request with the given error code and data
-	fn send<T: Sendable> (&self, ch: Channel, err: c_int, data: &T) {
-		let inheader: &fuse_in_header = ArgumentIterator::new(self.data).fetch();
-		do data.as_bytegroups |databytes| {
-			let datalen = databytes.iter().fold(0, |l, b| { l +  b.len()});
-			let outheader = fuse_out_header {
-				len: mem::size_of::<fuse_out_header>() as u32 + datalen as u32,
-				error: err as i32,
-				unique: inheader.unique,
-			};
-			do outheader.as_bytegroups |headbytes| {
-				ch.send(headbytes + databytes);
-			}
-		}
-	}
-
-	/// Reply to a request with the given data or error code
-	fn reply<T: Sendable> (&self, ch: Channel, result: Result<T, c_int>) {
-		match result {
-			Ok(reply) => self.send(ch, 0, &reply),
-			Err(err) => self.send(ch, -err, &()),
-		}
-	}
-
-	/// Reply to a request with the given error code
-	fn reply_error (&self, ch: Channel, err: c_int) {
-		self.send(ch, -err, &());
-	}
+pub fn new_request_with_handler<T>(chan:FuseChan, unique: u64, handler: ReplyHandler<T>) -> Request<T> {
+	Request { chan: chan, unique: unique, replied: false, reply_handler: Some(handler) }
 }
