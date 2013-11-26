@@ -7,7 +7,6 @@ use std::libc::{c_int, c_void, size_t};
 use std::libc::{EIO};
 use native::{fuse_args, fuse_mount_compat25, fuse_unmount_compat22, fuse_out_header, fuse_in_header};
 use sendable::Sendable;
-use extra::sync::Mutex;
 use extra::arc::Arc;
 
 /// Maximum write size. FUSE recommends at least 128k, max 16M. Default on OS X is 16M.
@@ -30,7 +29,6 @@ struct Channel {
 /// a different API.
 #[deriving(Clone)]
 pub struct FusePort { 
-	priv mutex: Mutex,
 	priv channel: Arc<Channel>
 }
 
@@ -39,7 +37,6 @@ pub struct FusePort {
 // a different API.
 #[deriving(Clone)]
 pub struct FuseChan {
-	priv mutex: Mutex,
 	priv channel: Arc<Channel>
 }
 
@@ -84,8 +81,8 @@ pub fn mount (mountpoint: &Path, options: &[&[u8]]) -> Result<(FusePort, FuseCha
 				Err(os::errno() as c_int)
 			} else { 
 				let channel = Arc::new(Channel { fd: fd, mountpoint: mountpoint.clone() });
-				Ok((FusePort {mutex: Mutex::new(), channel: channel.clone()},
-					FuseChan {mutex: Mutex::new(), channel: channel.clone()}))
+				Ok((FusePort {channel: channel.clone()},
+					FuseChan {channel: channel.clone()}))
 			}
 		}
 	}
@@ -122,21 +119,22 @@ impl FusePort {
 		assert!(data.capacity() >= BUFFER_SIZE);
 		// The kernel driver makes sure that we get exactly one request per read
 		
-		let res = do self.mutex.lock {
-			data.clear();
-			let capacity = data.capacity();
-			let rc = do data.as_mut_buf |ptr, _| {
-				// FIXME: This read can block the whole scheduler (and therefore multiple other tasks)
-				unsafe { ::std::libc::read(self.channel.get().fd, ptr as *mut c_void, capacity as size_t) }
-			};
-			if rc >= 0 { unsafe { vec::raw::set_len(data, rc as uint); } }
-			if rc < 0 { Err(os::errno() as c_int) } else { Ok(()) }
+		data.clear();
+		let capacity = data.capacity();
+		let rc = do data.as_mut_buf |ptr, _| {
+			// FIXME: This read can block the whole scheduler (and therefore multiple other tasks)
+			unsafe { ::std::libc::read(self.channel.get().fd, ptr as *mut c_void, capacity as size_t) }
 		};
-		if res.is_ok() && data.len() < mem::size_of::<fuse_in_header>() {
-			error!("Short read on FUSE device");
-			Err(EIO)
-		} else {
-			res
+		if rc >= 0 { unsafe { vec::raw::set_len(data, rc as uint); } }
+		if rc < 0 { 
+			Err(os::errno() as c_int)
+		} else { 
+			if data.len() < mem::size_of::<fuse_in_header>() {
+				error!("Short read on FUSE device");
+				Err(EIO)
+			} else {
+				Ok(())
+			}
 		}
 	}
 
@@ -162,17 +160,15 @@ impl FuseChan {
 
 	/// Send a piece of typed data along with a header
 	pub fn send<T: Sendable>(&self, unique: u64, err: c_int, data: &T) {
-		do self.mutex.lock {
-			do data.as_bytegroups |databytes| {
-				let datalen = databytes.iter().fold(0, |l, b| { l +  b.len()});
-				let outheader = fuse_out_header {
-					len: mem::size_of::<fuse_out_header>() as u32 + datalen as u32,
-					error: err as i32,
-					unique: unique,
-				};
-				do outheader.as_bytegroups |headbytes| {
-					self.send_buffer(headbytes + databytes);
-				}
+		do data.as_bytegroups |databytes| {
+			let datalen = databytes.iter().fold(0, |l, b| { l +  b.len()});
+			let outheader = fuse_out_header {
+				len: mem::size_of::<fuse_out_header>() as u32 + datalen as u32,
+				error: err as i32,
+				unique: unique,
+			};
+			do outheader.as_bytegroups |headbytes| {
+				self.send_buffer(headbytes + databytes);
 			}
 		}
 	}
