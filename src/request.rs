@@ -10,35 +10,32 @@ use sendable::{Sendable};
 use std::task;
 
 /// Function to handle replies to requests
-pub type ReplyHandler<T> = ~fn:Send(&FuseChan, u64, Result<T, c_int>);
+pub type ReplyHandler<T> = proc(&FuseChan, u64, Result<T, c_int>);
 
 /// Each filesystem operation has its own Request object, which must be used to get a Reply.
 pub struct Request<T> {
 	priv chan: FuseChan,
 	priv unique: u64,
 	replied: bool,
-	priv reply_handler: ReplyHandler<T>
+	priv reply_handler: Option<ReplyHandler<T>>
 }
 
 impl<T> Request<T> {
 	/// Reply to a filesystem operation synchronously.  The reply is sent immediately--when this
 	/// function returns, it has already been read and sent to the kernel.
-	pub fn reply(self, result: Result<T, c_int>) -> Reply {
-		let mut me = self;
-		(me.reply_handler)(&me.chan, me.unique, result);
-		me.replied = true;
+	pub fn reply(mut self, result: Result<T, c_int>) -> Reply {
+		self.reply_handler.take_unwrap()(&self.chan, self.unique, result);
+		self.replied = true;
 		reply_token()
 	}
 
 	/// Reply to a filesystem operation asynchronously.  A new task is spawned, with the scheduler
-	/// as specified by `sched_mode`, to run the passed function.  An arbitrary argument `arg` is
-	/// passed to the function as well, to allow for passing ownership into the new task like
-	/// `task::spawn_with` does.  The passed function must reply to the operation, and is given the
-	/// request object to allow it to do so.
-	pub fn reply_async<A:Send>(self, arg: A, sched_mode: task::SchedMode, func: ~fn:Send(req: Request<T>, arg: A) -> Reply) -> Reply {
+	/// as specified by `sched_mode`, to run the passed function.  The passed function must reply to
+	/// the operation, and is given the request object to allow it to do so.
+	pub fn reply_async(self, sched_mode: task::SchedMode, func: proc(req: Request<T>) -> Reply) -> Reply {
 		let mut builder = task::task();
 		builder.sched_mode(sched_mode);
-		builder.spawn_with((self, arg, func), |(req, arg, func)| { func(req, arg); });
+		builder.spawn(|| { func(self); });
 		reply_token()
 	}
 
@@ -79,5 +76,5 @@ pub fn new_request<T:Sendable>(chan:FuseChan, unique:u64) -> Request<T> {
 }
 
 pub fn new_request_with_handler<T>(chan:FuseChan, unique: u64, handler: ReplyHandler<T>) -> Request<T> {
-	Request { chan: chan, unique: unique, replied: false, reply_handler: handler }
+	Request { chan: chan, unique: unique, replied: false, reply_handler: Some(handler) }
 }

@@ -446,7 +446,8 @@ impl BackgroundSession {
 		// The background task is started using a a new single threaded
 		// scheduler since I/O in the session loop can block
 		t.sched_mode(task::SingleThreaded);
-		do t.spawn_with(se) |mut se| {
+		do t.spawn {
+			let mut se = se;
 			se.run();
 		}
 		BackgroundSession { mountpoint: mountpoint }

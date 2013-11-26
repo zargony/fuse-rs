@@ -61,7 +61,7 @@ impl fuse::Filesystem for DelayFS {
 			return req.reply(Err(ENOENT));
 		}
 		
-		do req.reply_async((), task::SingleThreaded) |req, _| {
+		do req.reply_async(task::SingleThreaded) |req| {
 			info!("Yawn...zzzzzz");
 			sleep((ino - INO_ROOT)*1000);
 			info!("Wakey wakey!");
