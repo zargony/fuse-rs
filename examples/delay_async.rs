@@ -12,6 +12,8 @@ use std::default::Default;
 use std::from_str::from_str;
 use std::task;
 use std::io::timer::sleep;
+use fuse::{Request, Reply, fuse_open_out};
+use fuse::consts::FOPEN_DIRECT_IO;
 
 // The root is inode INO_ROOT, and the file that delays N seconds is inode N+INO_ROOT.
 static INO_ROOT:u64 = 1;
@@ -27,9 +29,14 @@ fn root_dir_attr () -> fuse::fuse_attr {
 	}
 }
 
+fn file_contents(num:u64) -> ~str {
+	format!("This file took {:u} seconds to read.\n", num)
+}
+
 fn file_attr(num:u64) -> fuse::fuse_attr {
+	let content = file_contents(num);
 	fuse::fuse_attr {
-		ino: INO_ROOT+num, size: 13, mode: S_IFREG as u32 | 0o644, nlink: 1, uid: 501, gid: 20, ..Default::default()
+		ino: INO_ROOT+num, size: content.as_bytes().len() as u64, mode: S_IFREG as u32 | 0o644, nlink: 1, uid: 501, gid: 20, ..Default::default()
 	}
 }
 
@@ -56,16 +63,20 @@ impl fuse::Filesystem for DelayFS {
 		req.reply(result)
 	}
 
-	fn read (&mut self, req: fuse::Request<~[u8]>, ino: u64, _fh: u64, _offset: off_t, _size: size_t) -> fuse::Reply {
+	fn read (&mut self, req: fuse::Request<~[u8]>, ino: u64, _fh: u64, offset: off_t, _size: size_t) -> fuse::Reply {
 		if ino <= INO_ROOT || ino > INO_ROOT+MAX_DELAY {
 			return req.reply(Err(ENOENT));
 		}
 		
 		do req.reply_async(task::SingleThreaded) |req| {
-			info!("Yawn...zzzzzz");
-			sleep((ino - INO_ROOT)*1000);
-			info!("Wakey wakey!");
-			req.reply(Ok(~[]))
+			let num_secs = ino - INO_ROOT;
+			if offset == 0 {
+				info!("Yawn...zzzzzz");
+				sleep((num_secs)*1000);
+				info!("Wakey wakey!");
+			}
+			let result = file_contents(num_secs);
+			req.reply(Ok(result.as_bytes().tailn(offset as uint).into_owned()))
 		}
 	}
 
@@ -75,6 +86,10 @@ impl fuse::Filesystem for DelayFS {
 			} else { 
 				Ok(buffer)
 			})
+	}
+
+	fn open (&mut self, req: Request<~fuse_open_out>, _ino: u64, _flags: uint) -> Reply { 
+		req.reply(Ok(~fuse_open_out { fh: 0, open_flags: FOPEN_DIRECT_IO, padding: 0 })) 
 	}
 }
 
