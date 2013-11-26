@@ -442,11 +442,9 @@ impl BackgroundSession {
 	/// Start the session loop of the given session in a background task
 	pub fn start<FS: Filesystem+Send> (se: Session<FS>) -> BackgroundSession {
 		let mountpoint = se.mountpoint.clone();
-		let mut t = task::task();
 		// The background task is started using a a new single threaded
 		// scheduler since I/O in the session loop can block
-		t.sched_mode(task::SingleThreaded);
-		do t.spawn {
+		do task::spawn_sched(task::SingleThreaded) {
 			let mut se = se;
 			se.run();
 		}
