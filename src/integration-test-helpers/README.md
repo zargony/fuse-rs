@@ -1,0 +1,1 @@
+Each file in here is its own program, which runs a within-process test.  The tests are run in `main` instead of as rust unit tests, because the program here is intended to be run from a unit test within the parent wrapper process.  Rust's test-runner output does not nest well.
