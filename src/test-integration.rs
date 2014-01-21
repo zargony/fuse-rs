@@ -7,15 +7,15 @@ use std::cast::transmute;
 use std::comm::{Chan};
 use std::c_str::CString;
 use std::io::timer::{Timer, sleep};
-use std::io::{File, io_error, IoError, OtherIoError, Process};
+use std::io::{File, io_error, IoError, OtherIoError};
 use std::io::fs::stat;
-use std::io::process::{ProcessConfig, Ignored, InheritFd, MustDieSignal};
+use std::io::process::{Process, ProcessConfig, ProcessExit, Ignored, InheritFd, MustDieSignal};
 use std::iter::range_inclusive;
 use std::path::Path;
 use std::os::args;
 use extra::tempfile::TempDir;
 use std::str::from_utf8;
-use std::libc::{c_char, pid_t};
+use std::libc::c_char;
 use std::libc::funcs::posix88::signal::kill;
 use std::task::spawn;
 
@@ -102,32 +102,32 @@ fn wait_for(tries: uint, msecs: u64, name: &str, f:||->bool) -> bool {
 		}).next().is_none()
 }
 
-struct ProcessTimeoutGuard {
-	finish_chan: Chan<()>
-}
-impl ProcessTimeoutGuard {
-	fn new(pid: pid_t, name:~str, msecs: u64) -> ProcessTimeoutGuard {
-		let (finish_port, finish_chan) = Chan::new();
-		let timer = Timer::new().unwrap();  // Do this outside the child task so that we fail if we can't create the timer
-		do spawn {
-			let mut timer = timer;
-			let mut finish_port = finish_port;
-			let mut timeout_port = timer.oneshot(msecs);
-			select!(
-				_timed_out = timeout_port.recv() => {
-					error!("Timed out after {} msecs waiting for {} to finish", msecs, name);
-					unsafe { kill(pid, MustDieSignal as i32) };
-				},
-				_done = finish_port.recv() => {}
-				);
-		};
-		ProcessTimeoutGuard{ finish_chan: finish_chan }
-	}
-}
-impl Drop for ProcessTimeoutGuard {
-	fn drop(&mut self) {
-		self.finish_chan.try_send(());
-	}
+// Wait for a child process to finish, killing it if this does not happen within a given amount of time.
+fn process_wait_with_timeout(process:&mut Process, name:&str, msecs:u64) -> ProcessExit {
+	let (finish_port, finish_chan) = Chan::new();
+	let timer = Timer::new().unwrap();  // Do this outside the child task so that we fail if we can't create the timer
+	let pid = process.id();  // Can't send a reference to the Process object into the task, so we'll have to use libc's kill directly
+	let name = name.into_owned();
+	do spawn {
+		let mut timer = timer;
+		let mut finish_port = finish_port;
+		let mut timeout_port = timer.oneshot(msecs);
+		select!(
+			_timed_out = timeout_port.recv() => {
+				error!("Timed out after {} msecs waiting for {} to finish", msecs, name);
+				unsafe { kill(pid, MustDieSignal as i32) };
+			},
+			_done = finish_port.recv() => {}
+			);
+	};
+	let res = process.wait();
+	// Race condition alert: The timeout could happen between right here, after wait() has returned
+	// but before we send on the finish chan.  This would cause us to issue a libc kill on an
+	// expired pid--which in theory could be a whole different process unrelated to this one!  In
+	// practice this is so unlikely that we will consider it not worth worrying about in test-only
+	// code like this.
+	finish_chan.try_send(());
+	res
 }
 
 struct UserFilesystemMount {
@@ -188,11 +188,10 @@ impl UserFilesystemMount {
 		res
 	}
 
-	fn assert_withinprocess_test_succeeded(&mut self) {
+	fn assert_withinprocess_test_succeeded(&mut self, timeout_msecs:u64) {
 		let _g = io_error::cond.trap(|_:IoError| {}).guard();
-		let _timeout_guard = ProcessTimeoutGuard::new(self.fs_user_process.id(), self.name.clone(), 30000);
-		let pexit = self.fs_user_process.wait();
-		assert!(pexit.success());
+		let pexit = process_wait_with_timeout(&mut self.fs_user_process, self.name, timeout_msecs);
+		assert!(pexit.success(), "Within-process test {} failed", self.name);
 	}
 }
 impl Drop for UserFilesystemMount {
@@ -251,5 +250,5 @@ fn hello_example() {
 
 #[test]
 fn fs_mounted_after_spawn_returns() {
-	UserFilesystemMount::new(helper_path("fs-mounted-after-spawn-returns")).assert_withinprocess_test_succeeded();
+	UserFilesystemMount::new(helper_path("fs-mounted-after-spawn-returns")).assert_withinprocess_test_succeeded(30000);
 }
