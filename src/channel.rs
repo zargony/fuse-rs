@@ -36,10 +36,10 @@ fn with_fuse_args<T> (options: &[&[u8]], f: |&fuse_args| -> T) -> T {
 	})
 }
 
-/// A raw communication channel to the FUSE kernel driver
+/// A raw communication channel to the FUSE kernel driver.
+#[deriving(Clone)]
 pub struct Channel {
-	priv mountpoint: Path,
-	priv fd: c_int,
+	priv fd: c_int
 }
 
 impl Channel {
@@ -54,7 +54,7 @@ impl Channel {
 				if fd < 0 {
 					Err(os::errno() as c_int)
 				} else {
-					Ok(Channel { mountpoint: mountpoint.clone(), fd: fd })
+					Ok(Channel { fd: fd })
 				}
 			})
 		})
@@ -88,16 +88,10 @@ impl Channel {
 			Ok(())
 		}
 	}
-}
 
-impl Drop for Channel {
-	fn drop (&mut self) {
-		// TODO: send ioctl FUSEDEVIOCSETDAEMONDEAD on OS X before closing the fd
-		// Close the communication channel to the kernel driver
-		// (closing it before unnmount prevents sync unmount deadlock)
+	/// Close the channel.  Do this to prepare to unmount.
+	pub fn close (&self) {
 		unsafe { ::std::libc::close(self.fd); }
-		// Unmount this channel's mount point
-		unmount(&self.mountpoint);
 	}
 }
 

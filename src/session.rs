@@ -6,7 +6,7 @@
 //! operations under its mount point.
 //!
 
-use std::libc::{EAGAIN, EINTR, ENODEV, ENOENT};
+use std::libc::{EAGAIN, EINTR, ENODEV, ENOENT, EBADF};
 use native;
 use channel;
 use channel::Channel;
@@ -53,7 +53,7 @@ impl<FS: Filesystem+Send> Session<FS> {
 				Err(ENOENT) => continue,		// Operation interrupted. Accordingly to FUSE, this is safe to retry
 				Err(EINTR) => continue,			// Interrupted system call, retry
 				Err(EAGAIN) => continue,		// Explicitly try again
-				Err(ENODEV) => break,			// Filesystem was unmounted, quit the loop
+				Err(ENODEV) | Err(EBADF) => break,			// Filesystem was unmounted, quit the loop
 				Err(err) => fail!("Lost connection to FUSE device. Error {:i}", err),
 				Ok(..) => req.dispatch(self),
 			}
@@ -69,14 +69,16 @@ impl<FS: Filesystem+Send> Session<FS> {
 #[unsafe_destructor]
 impl<FS: Filesystem+Send> Drop for Session<FS> {
 	fn drop (&mut self) {
-		info!("Unmounted {}", self.mountpoint.display());
-		// The actual unmounting takes place because self.ch is dropped here
+		info!("Unmounting {}", self.mountpoint.display());
+		self.ch.close();
+		channel::unmount(&self.mountpoint);
 	}
 }
 
 /// The background session data structure
 pub struct BackgroundSession {
 	mountpoint: Path,
+	ch: Channel
 }
 
 impl BackgroundSession {
@@ -85,21 +87,23 @@ impl BackgroundSession {
 	/// the filesystem is unmounted and the given session ends.
 	pub fn new<FS: Filesystem+Send> (se: Session<FS>) -> BackgroundSession {
 		let mountpoint = se.mountpoint.clone();
+		let ch = se.ch.clone();
 		// The background task is started using a a new native thread
 		// since native I/O in the session loop can block
 		native::task::spawn(proc() {
 			let mut se = se;
 			se.run();
 		});
-		BackgroundSession { mountpoint: mountpoint }
+		BackgroundSession { mountpoint: mountpoint, ch: ch }
 	}
 }
 
 impl Drop for BackgroundSession {
 	fn drop (&mut self) {
 		info!("Unmounting {}", self.mountpoint.display());
-		// Unmounting the filesystem will eventually end the session loop,
+		// Closing the fd and unmounting will eventually end the session loop,
 		// drop the session and hence end the background task.
+		self.ch.close();
 		channel::unmount(&self.mountpoint);
 	}
 }
