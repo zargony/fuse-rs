@@ -10,6 +10,7 @@
 
 use std::mem;
 use std::libc::{c_int, EIO};
+use std::result::Result;
 use channel::ChannelSender;
 use fuse::fuse_out_header;
 use sendable::Sendable;
@@ -38,7 +39,7 @@ impl<T: Sendable> Reply<T> {
 	/// Reply to a request with the given error code and data. Must be called
 	/// only once (the `ok` and `error` methods ensure this by consuming `self`)
 	fn send (&mut self, err: c_int, bytes: &[&[u8]]) {
-		assert!(!self.replied);
+			assert!(!self.replied);
 		let len = bytes.iter().fold(0, |l, b| { l +  b.len()});
 		let outheader = fuse_out_header {
 			len: mem::size_of::<fuse_out_header>() as u32 + len as u32,
@@ -51,17 +52,16 @@ impl<T: Sendable> Reply<T> {
 		});
 	}
 
-	/// Reply to a request with the given data
-	pub fn ok (mut self, data: &T) {
-		data.as_bytegroups(|bytes| {
-			self.send(0, bytes);
-		});
+	/// Reply to a request with the given Result
+	pub fn reply (&mut self, result: Result<T, c_int>) {
+		match result {
+			Ok(data) => data.as_bytegroups(|bytes| {
+				self.send(0, bytes);
+			}),
+			Err(err) => self.send(-err, &[])
+		}
 	}
 
-	/// Reply to a request with the given error code
-	pub fn error (mut self, err: c_int) {
-		self.send(-err, []);
-	}
 }
 
 #[unsafe_destructor]
@@ -69,7 +69,7 @@ impl<T: Sendable> Drop for Reply<T> {
 	fn drop (&mut self) {
 		if !self.replied {
 			warn!("Reply not sent for operation {:u}, replying with I/O error", self.unique);
-			self.send(-EIO, []);
+			self.reply(Err(EIO));
 		}
 	}
 }
