@@ -10,7 +10,6 @@
 
 use std::mem;
 use std::libc::{c_int, EIO};
-use std::result::Result;
 use channel::ChannelSender;
 use fuse::fuse_out_header;
 use sendable::Sendable;
