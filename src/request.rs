@@ -4,7 +4,7 @@
 //!
 
 use std::{mem, str};
-use std::libc::{c_int, EIO, ENOSYS, EPROTO};
+use std::libc::{EIO, ENOSYS, EPROTO};
 use argument::ArgumentIterator;
 use channel::ChannelSender;
 use Filesystem;
@@ -76,7 +76,7 @@ impl<'a> Request<'a> {
 			Some(op) => op,
 			None => {
 				warn!("Ignoring unknown FUSE operation {:u}", self.header.opcode)
-				self.reply_error(ENOSYS);
+				self.reply::<()>().reply(Err(ENOSYS));
 				return;
 			},
 		};
@@ -89,7 +89,7 @@ impl<'a> Request<'a> {
 				// We don't support ABI versions before 7.6
 				if arg.major < 7 || (arg.major == 7 && arg.minor < 6) {
 					error!("Unsupported FUSE ABI version {:u}.{:u}", arg.major, arg.minor);
-					self.reply_error(EPROTO);
+					self.reply::<()>().reply(Err(EPROTO));
 					return;
 				}
 				// Remember ABI version supported by kernel
@@ -98,7 +98,7 @@ impl<'a> Request<'a> {
 				// Call filesystem init method and give it a chance to return an error
 				let res = se.filesystem.init(self);
 				if res.is_err() {
-					self.reply_error(res.unwrap_err());
+					self.reply().reply(res);
 					return;
 				}
 				// Reply with our desired version and settings. If the kernel supports a
@@ -114,37 +114,37 @@ impl<'a> Request<'a> {
 				};
 				debug!("INIT({:u}) response: ABI {:u}.{:u}, flags {:#x}, max readahead {:u}, max write {:u}", self.header.unique, reply.major, reply.minor, reply.flags, reply.max_readahead, reply.max_write);
 				se.initialized = true;
-				self.reply().ok(&reply);
+				self.reply().reply(Ok(reply));
 			},
 			// Any operation is invalid before initialization
 			_ if !se.initialized => {
 				warn!("Ignoring FUSE operation {:u} before init", self.header.opcode);
-				self.reply_error(EIO);
+				self.reply::<()>().reply(Err(EIO));
 			},
 			// Filesystem destroyed
 			FUSE_DESTROY => {
 				debug!("DESTROY({:u})", self.header.unique);
 				se.filesystem.destroy(self);
 				se.destroyed = true;
-				self.reply().ok(&());
+				self.reply().reply(Ok(()));
 			}
 			// Any operation is invalid after destroy
 			_ if se.destroyed => {
 				warn!("Ignoring FUSE operation {:u} after destroy", self.header.opcode);
-				self.reply_error(EIO);
+				self.reply::<()>().reply(Err(EIO));
 			}
 
 			FUSE_INTERRUPT => {
 				let arg: &fuse_interrupt_in = data.fetch();
 				debug!("INTERRUPT({:u}) unique {:u}", self.header.unique, arg.unique);
 				// TODO: handle FUSE_INTERRUPT
-				self.reply_error(ENOSYS);
+				self.reply::<()>().reply(Err(ENOSYS));
 			},
 
 			FUSE_LOOKUP => {
 				let name = data.fetch_path();
 				debug!("LOOKUP({:u}) parent {:#018x}, name {}", self.header.unique, self.header.nodeid, name.display());
-				se.filesystem.lookup(self, self.header.nodeid, &name, self.reply());
+				self.reply().reply(se.filesystem.lookup(self, self.header.nodeid, &name));
 			},
 			FUSE_FORGET => {
 				let arg: &fuse_forget_in = data.fetch();
@@ -153,116 +153,116 @@ impl<'a> Request<'a> {
 			},
 			FUSE_GETATTR => {
 				debug!("GETATTR({:u}) ino {:#018x}", self.header.unique, self.header.nodeid);
-				se.filesystem.getattr(self, self.header.nodeid, self.reply());
+				self.reply().reply(se.filesystem.getattr(self, self.header.nodeid));
 			},
 			FUSE_SETATTR => {
 				let arg: &fuse_setattr_in = data.fetch();
 				debug!("SETATTR({:u}) ino {:#018x}, valid {:#x}", self.header.unique, self.header.nodeid, arg.valid);
-				se.filesystem.setattr(self, self.header.nodeid, arg, self.reply());
+				self.reply().reply(se.filesystem.setattr(self, self.header.nodeid, arg));
 			},
 			FUSE_READLINK => {
 				debug!("READLINK({:u}) ino {:#018x}", self.header.unique, self.header.nodeid);
-				se.filesystem.readlink(self, self.header.nodeid, self.reply());
+				self.reply().reply(se.filesystem.readlink(self, self.header.nodeid));
 			},
 			FUSE_MKNOD => {
 				let arg: &fuse_mknod_in = data.fetch();
 				let name = data.fetch_path();
 				debug!("MKNOD({:u}) parent {:#018x}, name {}, mode {:#05o}, rdev {:u}", self.header.unique, self.header.nodeid, name.display(), arg.mode, arg.rdev);
-				se.filesystem.mknod(self, self.header.nodeid, &name, arg.mode, arg.rdev, self.reply());
+				self.reply().reply(se.filesystem.mknod(self, self.header.nodeid, &name, arg.mode, arg.rdev));
 			},
 			FUSE_MKDIR => {
 				let arg: &fuse_mkdir_in = data.fetch();
 				let name = data.fetch_path();
 				debug!("MKDIR({:u}) parent {:#018x}, name {}, mode {:#05o}", self.header.unique, self.header.nodeid, name.display(), arg.mode);
-				se.filesystem.mkdir(self, self.header.nodeid, &name, arg.mode, self.reply());
+				self.reply().reply(se.filesystem.mkdir(self, self.header.nodeid, &name, arg.mode));
 			},
 			FUSE_UNLINK => {
 				let name = data.fetch_path();
 				debug!("UNLINK({:u}) parent {:#018x}, name {}", self.header.unique, self.header.nodeid, name.display());
-				se.filesystem.unlink(self, self.header.nodeid, &name, self.reply());
+				self.reply().reply(se.filesystem.unlink(self, self.header.nodeid, &name));
 			},
 			FUSE_RMDIR => {
 				let name = data.fetch_path();
 				debug!("RMDIR({:u}) parent {:#018x}, name {}", self.header.unique, self.header.nodeid, name.display());
-				se.filesystem.rmdir(self, self.header.nodeid, &name, self.reply());
+				self.reply().reply(se.filesystem.rmdir(self, self.header.nodeid, &name));
 			},
 			FUSE_SYMLINK => {
 				let name = data.fetch_path();
 				let link = data.fetch_path();
 				debug!("SYMLINK({:u}) parent {:#018x}, name {}, link {}", self.header.unique, self.header.nodeid, name.display(), link.display());
-				se.filesystem.symlink(self, self.header.nodeid, &name, &link, self.reply());
+				self.reply().reply(se.filesystem.symlink(self, self.header.nodeid, &name, &link));
 			},
 			FUSE_RENAME => {
 				let arg: &fuse_rename_in = data.fetch();
 				let name = data.fetch_path();
 				let newname = data.fetch_path();
 				debug!("RENAME({:u}) parent {:#018x}, name {}, newparent {:#018x}, newname {}", self.header.unique, self.header.nodeid, name.display(), arg.newdir, newname.display());
-				se.filesystem.rename(self, self.header.nodeid, &name, arg.newdir, &newname, self.reply());
+				self.reply().reply(se.filesystem.rename(self, self.header.nodeid, &name, arg.newdir, &newname));
 			},
 			FUSE_LINK => {
 				let arg: &fuse_link_in = data.fetch();
 				let newname = data.fetch_path();
 				debug!("LINK({:u}) ino {:#018x}, newparent {:#018x}, newname {}", self.header.unique, arg.oldnodeid, self.header.nodeid, newname.display());
-				se.filesystem.link(self, arg.oldnodeid, self.header.nodeid, &newname, self.reply());
+				self.reply().reply(se.filesystem.link(self, arg.oldnodeid, self.header.nodeid, &newname));
 			},
 			FUSE_OPEN => {
 				let arg: &fuse_open_in = data.fetch();
 				debug!("OPEN({:u}) ino {:#018x}, flags {:#x}", self.header.unique, self.header.nodeid, arg.flags);
-				se.filesystem.open(self, self.header.nodeid, arg.flags as uint, self.reply());
+				self.reply().reply(se.filesystem.open(self, self.header.nodeid, arg.flags as uint));
 			},
 			FUSE_READ => {
 				let arg: &fuse_read_in = data.fetch();
 				debug!("READ({:u}) ino {:#018x}, fh {:u}, offset {:u}, size {:u}", self.header.unique, self.header.nodeid, arg.fh, arg.offset, arg.size);
-				se.filesystem.read(self, self.header.nodeid, arg.fh, arg.offset, arg.size as uint, self.reply());
+				self.reply().reply(se.filesystem.read(self, self.header.nodeid, arg.fh, arg.offset, arg.size as uint));
 			},
 			FUSE_WRITE => {
 				let arg: &fuse_write_in = data.fetch();
 				let data = data.fetch_data();
 				assert!(data.len() == arg.size as uint);
 				debug!("WRITE({:u}) ino {:#018x}, fh {:u}, offset {:u}, size {:u}, flags {:#x}", self.header.unique, self.header.nodeid, arg.fh, arg.offset, arg.size, arg.write_flags);
-				se.filesystem.write(self, self.header.nodeid, arg.fh, arg.offset, data, arg.write_flags as uint, self.reply());
+				self.reply().reply(se.filesystem.write(self, self.header.nodeid, arg.fh, arg.offset, data, arg.write_flags as uint));
 			},
 			FUSE_FLUSH => {
 				let arg: &fuse_flush_in = data.fetch();
 				debug!("FLUSH({:u}) ino {:#018x}, fh {:u}, lock owner {:u}", self.header.unique, self.header.nodeid, arg.fh, arg.lock_owner);
-				se.filesystem.flush(self, self.header.nodeid, arg.fh, arg.lock_owner, self.reply());
+				self.reply().reply(se.filesystem.flush(self, self.header.nodeid, arg.fh, arg.lock_owner));
 			},
 			FUSE_RELEASE => {
 				let arg: &fuse_release_in = data.fetch();
 				let flush = match arg.release_flags & FUSE_RELEASE_FLUSH { 0 => false, _ => true };
 				debug!("RELEASE({:u}) ino {:#018x}, fh {:u}, flags {:#x}, release flags {:#x}, lock owner {:u}", self.header.unique, self.header.nodeid, arg.fh, arg.flags, arg.release_flags, arg.lock_owner);
-				se.filesystem.release(self, self.header.nodeid, arg.fh, arg.flags as uint, arg.lock_owner, flush, self.reply());
+				self.reply().reply(se.filesystem.release(self, self.header.nodeid, arg.fh, arg.flags as uint, arg.lock_owner, flush));
 			},
 			FUSE_FSYNC => {
 				let arg: &fuse_fsync_in = data.fetch();
 				let datasync = match arg.fsync_flags & 1 { 0 => false, _ => true };
 				debug!("FSYNC({:u}) ino {:#018x}, fh {:u}, flags {:#x}", self.header.unique, self.header.nodeid, arg.fh, arg.fsync_flags);
-				se.filesystem.fsync(self, self.header.nodeid, arg.fh, datasync, self.reply());
+				self.reply().reply(se.filesystem.fsync(self, self.header.nodeid, arg.fh, datasync));
 			},
 			FUSE_OPENDIR => {
 				let arg: &fuse_open_in = data.fetch();
 				debug!("OPENDIR({:u}) ino {:#018x}, flags {:#x}", self.header.unique, self.header.nodeid, arg.flags);
-				se.filesystem.opendir(self, self.header.nodeid, arg.flags as uint, self.reply());
+				self.reply().reply(se.filesystem.opendir(self, self.header.nodeid, arg.flags as uint));
 			},
 			FUSE_READDIR => {
 				let arg: &fuse_read_in = data.fetch();
 				debug!("READDIR({:u}) ino {:#018x}, fh {:u}, offset {:u}, size {:u}", self.header.unique, self.header.nodeid, arg.fh, arg.offset, arg.size);
-				se.filesystem.readdir(self, self.header.nodeid, arg.fh, arg.offset, DirBuffer::new(arg.size as uint), self.reply());
+				self.reply().reply(se.filesystem.readdir(self, self.header.nodeid, arg.fh, arg.offset, DirBuffer::new(arg.size as uint)));
 			},
 			FUSE_RELEASEDIR => {
 				let arg: &fuse_release_in = data.fetch();
 				debug!("RELEASEDIR({:u}) ino {:#018x}, fh {:u}, flags {:#x}, release flags {:#x}, lock owner {:u}", self.header.unique, self.header.nodeid, arg.fh, arg.flags, arg.release_flags, arg.lock_owner);
-				se.filesystem.releasedir(self, self.header.nodeid, arg.fh, arg.flags as uint, self.reply());
+				self.reply().reply(se.filesystem.releasedir(self, self.header.nodeid, arg.fh, arg.flags as uint));
 			},
 			FUSE_FSYNCDIR => {
 				let arg: &fuse_fsync_in = data.fetch();
 				let datasync = match arg.fsync_flags & 1 { 0 => false, _ => true };
 				debug!("FSYNCDIR({:u}) ino {:#018x}, fh {:u}, flags {:#x}", self.header.unique, self.header.nodeid, arg.fh, arg.fsync_flags);
-				se.filesystem.fsyncdir(self, self.header.nodeid, arg.fh, datasync, self.reply());
+				self.reply().reply(se.filesystem.fsyncdir(self, self.header.nodeid, arg.fh, datasync));
 			},
 			FUSE_STATFS => {
 				debug!("STATFS({:u}) ino {:#018x}", self.header.unique, self.header.nodeid);
-				se.filesystem.statfs(self, self.header.nodeid, self.reply());
+				self.reply().reply(se.filesystem.statfs(self, self.header.nodeid));
 			},
 			FUSE_SETXATTR => {
 				let arg: &fuse_setxattr_in = data.fetch();
@@ -274,50 +274,50 @@ impl<'a> Request<'a> {
 				fn get_position(arg: &fuse_setxattr_in) -> u32 { arg.position }
 				#[cfg(not(target_os = "macos"))]
 				fn get_position(_arg: &fuse_setxattr_in) -> u32 { 0 }
-				se.filesystem.setxattr(self, self.header.nodeid, name, value, arg.flags as uint, get_position(arg), self.reply());
+				self.reply().reply(se.filesystem.setxattr(self, self.header.nodeid, name, value, arg.flags as uint, get_position(arg)));
 			},
 			FUSE_GETXATTR => {
 				let arg: &fuse_getxattr_in = data.fetch();
 				let name = data.fetch_str();
 				debug!("GETXATTR({:u}) ino {:#018x}, name {:s}, size {:u}", self.header.unique, self.header.nodeid, str::from_utf8_lossy(name), arg.size);
-				se.filesystem.getxattr(self, self.header.nodeid, name, self.reply());
+				self.reply().reply(se.filesystem.getxattr(self, self.header.nodeid, name));
 			},
 			FUSE_LISTXATTR => {
 				let arg: &fuse_getxattr_in = data.fetch();
 				debug!("LISTXATTR({:u}) ino {:#018x}, size {:u}", self.header.unique, self.header.nodeid, arg.size);
-				se.filesystem.listxattr(self, self.header.nodeid, self.reply());
+				self.reply().reply(se.filesystem.listxattr(self, self.header.nodeid));
 			},
 			FUSE_REMOVEXATTR => {
 				let name = data.fetch_str();
 				debug!("REMOVEXATTR({:u}) ino {:#018x}, name {:s}", self.header.unique, self.header.nodeid, str::from_utf8_lossy(name));
-				se.filesystem.removexattr(self, self.header.nodeid, name, self.reply());
+				self.reply().reply(se.filesystem.removexattr(self, self.header.nodeid, name));
 			},
 			FUSE_ACCESS => {
 				let arg: &fuse_access_in = data.fetch();
 				debug!("ACCESS({:u}) ino {:#018x}, mask {:#05o}", self.header.unique, self.header.nodeid, arg.mask);
-				se.filesystem.access(self, self.header.nodeid, arg.mask as uint, self.reply());
+				self.reply().reply(se.filesystem.access(self, self.header.nodeid, arg.mask as uint));
 			},
 			FUSE_CREATE => {
 				let arg: &fuse_open_in = data.fetch();
 				let name = data.fetch_path();
 				debug!("CREATE({:u}) parent {:#018x}, name {}, mode {:#05o}, flags {:#x}", self.header.unique, self.header.nodeid, name.display(), arg.mode, arg.flags);
-				se.filesystem.create(self, self.header.nodeid, &name, arg.mode, arg.flags as uint, self.reply());
+				self.reply().reply(se.filesystem.create(self, self.header.nodeid, &name, arg.mode, arg.flags as uint));
 			},
 			FUSE_GETLK => {
 				let arg: &fuse_lk_in = data.fetch();
 				debug!("GETLK({:u}) ino {:#018x}, fh {:u}, lock owner {:u}", self.header.unique, self.header.nodeid, arg.fh, arg.owner);
-				se.filesystem.getlk(self, self.header.nodeid, arg.fh, arg.owner, &arg.lk, self.reply());
+				self.reply().reply(se.filesystem.getlk(self, self.header.nodeid, arg.fh, arg.owner, &arg.lk));
 			},
 			FUSE_SETLK | FUSE_SETLKW => {
 				let arg: &fuse_lk_in = data.fetch();
 				let sleep = match opcode { FUSE_SETLKW => true, _ => false };
 				debug!("SETLK({:u}) ino {:#018x}, fh {:u}, lock owner {:u}", self.header.unique, self.header.nodeid, arg.fh, arg.owner);
-				se.filesystem.setlk(self, self.header.nodeid, arg.fh, arg.owner, &arg.lk, sleep, self.reply());
+				self.reply().reply(se.filesystem.setlk(self, self.header.nodeid, arg.fh, arg.owner, &arg.lk, sleep));
 			},
 			FUSE_BMAP => {
 				let arg: &fuse_bmap_in = data.fetch();
 				debug!("BMAP({:u}) ino {:#018x}, blocksize {:u}, ids {:u}", self.header.unique, self.header.nodeid, arg.blocksize, arg.block);
-				se.filesystem.bmap(self, self.header.nodeid, arg.blocksize as uint, arg.block, self.reply());
+				self.reply().reply(se.filesystem.bmap(self, self.header.nodeid, arg.blocksize as uint, arg.block));
 			},
 			// OS X only
 			FUSE_SETVOLNAME | FUSE_EXCHANGE | FUSE_GETXTIMES => self.dispatch_macos_only(opcode, se),
@@ -353,18 +353,13 @@ impl<'a> Request<'a> {
 	#[cfg(not(target_os = "macos"))]
 	fn dispatch_macos_only<FS: Filesystem> (&self, _opcode: fuse_opcode, _se: &mut Session<FS>) {
 		warn!("Ignoring unsupported FUSE operation {:u}", self.header.opcode)
-		self.reply_error(ENOSYS);
+		self.reply::<()>().reply(Err(ENOSYS));
 	}
 
 	/// Create a reply object for this request that can be passed to the filesystem
 	/// implementation and makes sure that a request is replied eventually
 	fn reply<T: Sendable> (&self) -> Reply<T> {
 		reply(self.ch, self.header.unique)
-	}
-
-	/// Shortcut to immediately reply to a request with an error code
-	fn reply_error (&self, err: c_int) {
-		self.reply::<()>().error(err);
 	}
 
 	/// Returns the unique identifier of this request

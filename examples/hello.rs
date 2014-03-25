@@ -1,10 +1,10 @@
 extern crate fuse;
 
 use std::default::Default;
-use std::libc::{ENOENT, S_IFDIR, S_IFREG};
+use std::libc::{c_int, ENOENT, S_IFDIR, S_IFREG};
 use std::io::{TypeFile, TypeDirectory};
 use std::os;
-use fuse::{Filesystem, Request, Reply, fuse_attr, fuse_entry_out, fuse_attr_out, DirBuffer};
+use fuse::{Filesystem, Request, fuse_attr, fuse_entry_out, fuse_attr_out, DirBuffer};
 
 struct HelloFS;
 
@@ -23,40 +23,40 @@ fn hello_txt_attr () -> fuse_attr {
 }
 
 impl Filesystem for HelloFS {
-	fn lookup (&mut self, _req: &Request, parent: u64, name: &PosixPath, reply: Reply<fuse_entry_out>) {
+	fn lookup (&mut self, _req: &Request, parent: u64, name: &PosixPath) -> Result<fuse_entry_out, c_int> {
 		if parent == 1 && name.as_str() == Some("hello.txt") {
-			reply.ok(&fuse_entry_out { nodeid: 2, generation: 0, attr: hello_txt_attr(), entry_valid: 1, entry_valid_nsec: 0, attr_valid: 1, attr_valid_nsec: 0 });
+			Ok(fuse_entry_out { nodeid: 2, generation: 0, attr: hello_txt_attr(), entry_valid: 1, entry_valid_nsec: 0, attr_valid: 1, attr_valid_nsec: 0 })
 		} else {
-			reply.error(ENOENT);
+			Err(ENOENT)
 		}
 	}
 
-	fn getattr (&mut self, _req: &Request, ino: u64, reply: Reply<fuse_attr_out>) {
+	fn getattr (&mut self, _req: &Request, ino: u64) -> Result<fuse_attr_out, c_int> {
 		match ino {
-			1 => reply.ok(&fuse_attr_out { attr_valid: 1, attr_valid_nsec: 0, dummy: 0, attr: hello_dir_attr() }),
-			2 => reply.ok(&fuse_attr_out { attr_valid: 1, attr_valid_nsec: 0, dummy: 0, attr: hello_txt_attr() }),
-			_ => reply.error(ENOENT),
+			1 => Ok(fuse_attr_out { attr_valid: 1, attr_valid_nsec: 0, dummy: 0, attr: hello_dir_attr() }),
+			2 => Ok(fuse_attr_out { attr_valid: 1, attr_valid_nsec: 0, dummy: 0, attr: hello_txt_attr() }),
+			_ => Err(ENOENT),
 		}
 	}
 
-	fn read (&mut self, _req: &Request, ino: u64, _fh: u64, offset: u64, _size: uint, reply: Reply<Vec<u8>>) {
+	fn read (&mut self, _req: &Request, ino: u64, _fh: u64, offset: u64, _size: uint) -> Result<Vec<u8>, c_int> {
 		if ino == 2 {
-			reply.ok(&Vec::from_slice(HELLO_WORLD.as_bytes().tailn(offset as uint)));
+			Ok(Vec::from_slice(HELLO_WORLD.as_bytes().tailn(offset as uint)))
 		} else {
-			reply.error(ENOENT);
+			Err(ENOENT)
 		}
 	}
 
-	fn readdir (&mut self, _req: &Request, ino: u64, _fh: u64, offset: u64, mut buffer: DirBuffer, reply: Reply<DirBuffer>) {
+	fn readdir (&mut self, _req: &Request, ino: u64, _fh: u64, offset: u64, mut buffer: DirBuffer) -> Result<DirBuffer, c_int> {
 		if ino == 1 {
 			if offset == 0 {
 				buffer.fill(1, 0, TypeDirectory, &PosixPath::new("."));
 				buffer.fill(1, 1, TypeDirectory, &PosixPath::new(".."));
 				buffer.fill(2, 2, TypeFile, &PosixPath::new("hello.txt"));
 			}
-			reply.ok(&buffer);
+			Ok(buffer)
 		} else {
-			reply.error(ENOENT);
+			Err(ENOENT)
 		}
 	}
 }
