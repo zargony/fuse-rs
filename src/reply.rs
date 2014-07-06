@@ -8,7 +8,7 @@
 //! exactly once).
 //!
 
-use std::{mem, ptr, slice};
+use std::{mem, ptr, raw};
 use std::io::{FileType, TypeFile, TypeDirectory, TypeNamedPipe, TypeBlockSpecial, TypeSymlink, TypeUnknown, FilePermission};
 use libc::c_int;
 use libc::consts::os::posix88::EIO;
@@ -28,11 +28,15 @@ pub trait Reply {
 }
 
 /// Serialize an arbitrary type to bytes (memory copy, useful for fuse_*_out types)
-fn as_bytes<T: Copy, U> (data: &T, f: |&[&[u8]]| -> U) -> U {
+fn as_bytes<'a, T: Copy, U> (data: &T, f: |&[&'a [u8]]| -> U) -> U {
 	let len = mem::size_of::<T>();
 	match len {
 		0 => f([]),
-		len => unsafe { slice::raw::buf_as_slice(data as *const T as *const u8, len, |bytes| f([bytes]) ) },
+		len => unsafe {
+			let data = data as *const T as *const u8;
+			let slice: &'a [u8] = mem::transmute(raw::Slice { data: data, len: len });
+			f([slice])
+		},
 	}
 }
 
