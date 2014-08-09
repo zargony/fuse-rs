@@ -1,6 +1,15 @@
-extern crate fuse;
+#![crate_id = "hello#0.0."]
+#![feature(globs)]
 extern crate libc;
 extern crate time;
+extern crate fuse;
+//use libc::size_t;
+//use std::c_str::CString;
+use fuse::*;
+//mod fuse;
+
+
+//extern crate fuse;
 
 use std::io::{TypeFile, TypeDirectory, UserFile, UserDir};
 use std::os;
