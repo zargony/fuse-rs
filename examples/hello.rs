@@ -1,6 +1,14 @@
-extern crate fuse;
+#![feature(globs)]
 extern crate libc;
 extern crate time;
+extern crate fuse;
+//use libc::size_t;
+//use std::c_str::CString;
+use fuse::*;
+//mod fuse;
+
+
+//extern crate fuse;
 
 use std::io::{TypeFile, TypeDirectory, UserFile, UserDir};
 use std::os;
@@ -69,7 +77,7 @@ impl Filesystem for HelloFS {
 
 	fn read (&mut self, _req: &Request, ino: u64, _fh: u64, offset: u64, _size: uint, reply: ReplyData) {
 		if ino == 2 {
-			reply.data(HELLO_TXT_CONTENT.as_bytes().tailn(offset as uint));
+			reply.data(HELLO_TXT_CONTENT.as_bytes().slice_from(offset as uint));
 		} else {
 			reply.error(ENOENT);
 		}
@@ -90,6 +98,6 @@ impl Filesystem for HelloFS {
 }
 
 fn main () {
-	let mountpoint = Path::new(os::args().get(1).as_slice());
+	let mountpoint = Path::new(os::args()[1].as_slice());
 	fuse::mount(HelloFS, &mountpoint, []);
 }

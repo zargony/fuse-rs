@@ -1,0 +1,16 @@
+[package]
+name = "rust-fuse"
+version = "0.1.0"
+authors = [ "Andreas Neuhaus <zargony@zargony.com>" ]
+
+[[bin]]
+name = "basic" # the name of the executable to generate
+path = "examples/hello.rs"
+
+[[bin]]
+name = "null" # the name of the executable to generate
+path = "examples/null.rs"
+
+[[lib]]
+name = "fuse" # the name of the library to generate
+path = "src/lib.rs"
