@@ -1,7 +1,6 @@
-language: c
-env:
-  global:
-    - secure: GMDU5g5cG1LmlhcXUmDwEV57oNYWOqi8YXswhP7oMdZkC+Nf/Bw0UX18dNlJ9zaqoKKJ07wIVdKO5Jy5VLtybt+/f8NF1OgOKgx6sYAPDEHc4jZtqEj16bxfRXuzOUtTut3nuf41ZJhNgj4+W8qDSkFEWuhp7EJ3DcXHnXl9/3A=
+#env:
+#  global:
+#    - secure: GMDU5g5cG1LmlhcXUmDwEV57oNYWOqi8YXswhP7oMdZkC+Nf/Bw0UX18dNlJ9zaqoKKJ07wIVdKO5Jy5VLtybt+/f8NF1OgOKgx6sYAPDEHc4jZtqEj16bxfRXuzOUtTut3nuf41ZJhNgj4+W8qDSkFEWuhp7EJ3DcXHnXl9/3A=
 before_install:
   - sudo add-apt-repository --yes ppa:hansjorg/rust
   - sudo add-apt-repository --yes ppa:cmrx64/cargo
@@ -13,5 +12,5 @@ script:
   - cargo build
   - cargo test
   - cargo doc
-after_script:
-  - curl http://www.rust-ci.org/artifacts/put?t=$RUSTCI_TOKEN | sh
+#after_script:
+#  - curl http://www.rust-ci.org/artifacts/put?t=$RUSTCI_TOKEN | sh
