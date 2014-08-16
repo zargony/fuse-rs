@@ -1,7 +1,7 @@
 [package]
 name = "rust-fuse"
 version = "0.1.0"
-authors = [ "n/a" ]
+authors = [ "Andreas Neuhaus <zargony@zargony.com>" ]
 
 [[bin]]
 name = "basic" # the name of the executable to generate

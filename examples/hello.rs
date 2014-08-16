@@ -1,4 +1,3 @@
-#![crate_id = "hello#0.0."]
 #![feature(globs)]
 extern crate libc;
 extern crate time;
