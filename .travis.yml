@@ -1,3 +1,4 @@
+language: c
 #env:
 #  global:
 #    - secure: GMDU5g5cG1LmlhcXUmDwEV57oNYWOqi8YXswhP7oMdZkC+Nf/Bw0UX18dNlJ9zaqoKKJ07wIVdKO5Jy5VLtybt+/f8NF1OgOKgx6sYAPDEHc4jZtqEj16bxfRXuzOUtTut3nuf41ZJhNgj4+W8qDSkFEWuhp7EJ3DcXHnXl9/3A=
