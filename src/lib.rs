@@ -15,7 +15,7 @@
 #![feature(unsafe_destructor)]
 #![feature(convert)]
 
-#![warn(missing_docs, bad_style, unused, unused_extern_crates, unused_import_braces, unused_qualifications, unused_typecasts)]
+#![warn(missing_docs, bad_style, unused, unused_extern_crates, unused_import_braces, unused_qualifications)]
 
 extern crate libc;
 #[macro_use]
@@ -24,7 +24,7 @@ extern crate time;
 
 use std::io;
 use std::ffi::OsStr;
-use std::path::{Path, AsPath};
+use std::path::Path;
 use libc::{c_int, ENOSYS};
 use time::Timespec;
 
@@ -377,8 +377,8 @@ pub trait Filesystem {
 
 /// Mount the given filesystem to the given mountpoint. This function will
 /// not return until the filesystem is unmounted.
-pub fn mount<FS: Filesystem+Send, P: AsPath> (filesystem: FS, mountpoint: &P, options: &[&OsStr]) {
-    Session::new(filesystem, mountpoint.as_path(), options).run();
+pub fn mount<FS: Filesystem+Send, P: AsRef<Path>> (filesystem: FS, mountpoint: &P, options: &[&OsStr]) {
+    Session::new(filesystem, mountpoint.as_ref(), options).run();
 }
 
 /// Mount the given filesystem to the given mountpoint. This function spawns
@@ -386,6 +386,6 @@ pub fn mount<FS: Filesystem+Send, P: AsPath> (filesystem: FS, mountpoint: &P, op
 /// and therefore returns immediately. The returned handle should be stored
 /// to reference the mounted filesystem. If it's dropped, the filesystem will
 /// be unmounted.
-pub fn spawn_mount<'a, FS: Filesystem+Send+'static, P: AsPath> (filesystem: FS, mountpoint: &P, options: &[&OsStr]) -> io::Result<BackgroundSession<'a>> {
-    Session::new(filesystem, mountpoint.as_path(), options).spawn()
+pub fn spawn_mount<'a, FS: Filesystem+Send+'static, P: AsRef<Path>> (filesystem: FS, mountpoint: &P, options: &[&OsStr]) -> io::Result<BackgroundSession<'a>> {
+    Session::new(filesystem, mountpoint.as_ref(), options).spawn()
 }
