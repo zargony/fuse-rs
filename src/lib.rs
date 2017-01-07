@@ -159,7 +159,7 @@ pub trait Filesystem {
     }
 
     /// Create a symbolic link.
-    fn symlink (&mut self, _req: &Request, _parent: u64, _name: &OsStr, _link: &Path, reply: ReplyEntry) {
+    fn symlink (&mut self, _req: &Request, _parent: u64, _name: &OsStr, _link: &OsStr, reply: ReplyEntry) {
         reply.error(ENOSYS);
     }
 
