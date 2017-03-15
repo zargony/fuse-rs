@@ -105,6 +105,7 @@ pub mod consts {
     // Flags returned by the open request
     pub const FOPEN_DIRECT_IO: u32          = 1 << 0;   // bypass page cache for this open file
     pub const FOPEN_KEEP_CACHE: u32         = 1 << 1;   // don't invalidate the data cache on open
+    pub const FOPEN_NONSEEKABLE: u32        = 1 << 2;   // the file is not seekable
     #[cfg(target_os = "macos")]
     pub const FOPEN_PURGE_ATTR: u32         = 1 << 30;  // OS X only
     #[cfg(target_os = "macos")]
