@@ -31,7 +31,7 @@ pub const FUSE_ROOT_ID: u64 = 1;
 #[derive(Debug)]
 pub struct fuse_attr {
     pub ino: u64,
-    pub size: u64,
+    pub size: i64,
     pub blocks: u64,
     pub atime: i64,
     pub mtime: i64,
@@ -295,7 +295,7 @@ pub struct fuse_setattr_in {
     pub valid: u32,
     pub padding: u32,
     pub fh: u64,
-    pub size: u64,
+    pub size: i64,
     pub unused1: u64,
     pub atime: i64,
     pub mtime: i64,
