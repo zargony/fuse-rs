@@ -17,12 +17,12 @@ use session::{MAX_WRITE_SIZE, Session};
 
 /// We generally support async reads
 #[cfg(not(target_os = "macos"))]
-const INIT_FLAGS: u32 = FUSE_ASYNC_READ;
+const INIT_FLAGS: u32 = FUSE_ASYNC_READ | FUSE_EXPORT_SUPPORT | FUSE_BIG_WRITES;
 
 /// On macOS, we additionally support case insensitiveness, volume renames and xtimes
 /// TODO: we should eventually let the filesystem implementation decide which flags to set
 #[cfg(target_os = "macos")]
-const INIT_FLAGS: u32 = FUSE_ASYNC_READ | FUSE_CASE_INSENSITIVE | FUSE_VOL_RENAME | FUSE_XTIMES;
+const INIT_FLAGS: u32 = FUSE_ASYNC_READ | FUSE_EXPORT_SUPPORT | FUSE_BIG_WRITES | FUSE_CASE_INSENSITIVE | FUSE_VOL_RENAME | FUSE_XTIMES;
 
 /// Create a new request from the given buffer
 pub fn request<'a>(ch: ChannelSender, buffer: &'a [u8]) -> Option<Request<'a>> {
@@ -109,7 +109,8 @@ impl<'a> Request<'a> {
                     minor: FUSE_KERNEL_MINOR_VERSION,
                     max_readahead: arg.max_readahead,       // accept any readahead size
                     flags: arg.flags & INIT_FLAGS,          // use features given in INIT_FLAGS and reported as capable
-                    unused: 0,
+                    max_background: 0,
+                    congestion_threshold: 0,
                     max_write: MAX_WRITE_SIZE as u32,       // use a max write size that fits into the session's buffer
                 };
                 debug!("INIT({}) response: ABI {}.{}, flags {:#x}, max readahead {}, max write {}", self.header.unique, init.major, init.minor, init.flags, init.max_readahead, init.max_write);
@@ -359,7 +360,7 @@ impl<'a> Request<'a> {
                 se.filesystem.access(self, self.header.nodeid, arg.mask, self.reply());
             }
             FUSE_CREATE => {
-                let arg: &fuse_open_in = data.fetch();
+                let arg: &fuse_create_in = data.fetch();
                 let name = data.fetch_str();
                 debug!("CREATE({}) parent {:#018x}, name {:?}, mode {:#05o}, flags {:#x}", self.header.unique, self.header.nodeid, name, arg.mode, arg.flags);
                 se.filesystem.create(self, self.header.nodeid, &name, arg.mode, arg.flags, self.reply());
@@ -382,7 +383,22 @@ impl<'a> Request<'a> {
                 let arg: &fuse_bmap_in = data.fetch();
                 debug!("BMAP({}) ino {:#018x}, blocksize {}, ids {}", self.header.unique, self.header.nodeid, arg.blocksize, arg.block);
                 se.filesystem.bmap(self, self.header.nodeid, arg.blocksize, arg.block, self.reply());
-            }
+            },
+            FUSE_IOCTL => {
+                unimplemented!()
+            },
+            FUSE_POLL => {
+                unimplemented!()
+            },
+            FUSE_NOTIFY_REPLY => {
+                unimplemented!()
+            },
+            FUSE_BATCH_FORGET => {
+                unimplemented!()
+            },
+            FUSE_FALLOCATE => {
+                unimplemented!()
+            },
             #[cfg(target_os = "macos")]
             FUSE_SETVOLNAME => {
                 let name = data.fetch_str();
@@ -401,7 +417,10 @@ impl<'a> Request<'a> {
             FUSE_GETXTIMES => {
                 debug!("GETXTIMES({}) ino {:#018x}", self.header.unique, self.header.nodeid);
                 se.filesystem.getxtimes(self, self.header.nodeid, self.reply());
-            }
+            },
+            CUSE_INIT => {
+                unimplemented!()
+            },
         }
     }
 
