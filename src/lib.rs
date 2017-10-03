@@ -23,7 +23,7 @@ pub use kernel::FUSE_ROOT_ID;
 pub use kernel::consts;
 pub use reply::{Reply, ReplyEmpty, ReplyData, ReplyEntry, ReplyAttr, ReplyOpen};
 pub use reply::{ReplyWrite, ReplyStatfs, ReplyCreate, ReplyLock, ReplyBmap, ReplyDirectory};
-pub use reply::ReplyXattr;
+pub use reply::{ReplyXattr, ReplyIoctl};
 #[cfg(target_os = "macos")]
 pub use reply::ReplyXTimes;
 pub use request::Request;
@@ -346,6 +346,16 @@ pub trait Filesystem {
     /// Note: This makes sense only for block device backed filesystems mounted
     /// with the 'blkdev' option
     fn bmap(&mut self, _req: &Request, _ino: u64, _blocksize: u32, _idx: u64, reply: ReplyBmap) {
+        reply.error(ENOSYS);
+    }
+
+    /// control device
+    fn ioctl(&mut self, _req: &Request, _ino: u64, _fh: u64, _flags: u32, _cmd: u32, _in_data: Option<&[u8]>, _out_size: u32, reply: ReplyIoctl) {
+        reply.error(ENOSYS);
+    }
+
+    /// Preallocate or deallocate space to a file
+    fn fallocate(&mut self, _req: &Request, _ino: u64, _fh: u64, _offset: i64, _length: i64, _mode: i32, reply: ReplyEmpty) {
         reply.error(ENOSYS);
     }
 
