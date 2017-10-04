@@ -32,6 +32,7 @@ pub use session::{Session, BackgroundSession};
 mod argument;
 mod channel;
 mod kernel;
+#[cfg(feature = "libfuse")]
 mod libfuse;
 mod reply;
 mod request;
@@ -382,6 +383,7 @@ pub trait Filesystem {
 
 /// Mount the given filesystem to the given mountpoint. This function will
 /// not return until the filesystem is unmounted.
+#[cfg(feature = "libfuse")]
 pub fn mount<FS: Filesystem, P: AsRef<Path>>(filesystem: FS, mountpoint: &P, options: &[&OsStr]) -> io::Result<()>{
     Session::new(filesystem, mountpoint.as_ref(), options).and_then(|mut se| se.run())
 }
@@ -391,6 +393,7 @@ pub fn mount<FS: Filesystem, P: AsRef<Path>>(filesystem: FS, mountpoint: &P, opt
 /// and therefore returns immediately. The returned handle should be stored
 /// to reference the mounted filesystem. If it's dropped, the filesystem will
 /// be unmounted.
+#[cfg(feature = "libfuse")]
 pub unsafe fn spawn_mount<'a, FS: Filesystem+Send+'a, P: AsRef<Path>>(filesystem: FS, mountpoint: &P, options: &[&OsStr]) -> io::Result<BackgroundSession<'a>> {
     Session::new(filesystem, mountpoint.as_ref(), options).and_then(|se| se.spawn())
 }

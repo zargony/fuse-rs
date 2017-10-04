@@ -7,5 +7,6 @@ static LIBFUSE_NAME: &str = "fuse";
 static LIBFUSE_NAME: &str = "osxfuse";
 
 fn main () {
+    #[cfg(feature = "libfuse")]
     pkg_config::Config::new().atleast_version("2.6.0").probe(LIBFUSE_NAME).unwrap();
 }

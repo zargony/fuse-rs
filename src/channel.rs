@@ -7,11 +7,14 @@ use std::ffi::{CString, CStr, OsStr};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{PathBuf, Path};
 use libc::{self, c_int, c_void, size_t};
+use std::os::unix::io::RawFd;
+#[cfg(feature = "libfuse")]
 use libfuse::{fuse_args, fuse_mount_compat25};
 use reply::ReplySender;
 
 /// Helper function to provide options as a fuse_args struct
 /// (which contains an argc count and an argv pointer)
+#[cfg(feature = "libfuse")]
 fn with_fuse_args<T, F: FnOnce(&fuse_args) -> T>(options: &[&OsStr], f: F) -> T {
     let mut args = vec![CString::new("rust-fuse").unwrap()];
     args.extend(options.iter().map(|s| CString::new(s.as_bytes()).unwrap()));
@@ -23,7 +26,7 @@ fn with_fuse_args<T, F: FnOnce(&fuse_args) -> T>(options: &[&OsStr], f: F) -> T 
 #[derive(Debug)]
 pub struct Channel {
     mountpoint: PathBuf,
-    fd: c_int,
+    fd: RawFd,
 }
 
 impl Channel {
@@ -31,6 +34,7 @@ impl Channel {
     /// given path. The kernel driver will delegate filesystem operations of
     /// the given path to the channel. If the channel is dropped, the path is
     /// unmounted.
+    #[cfg(feature = "libfuse")]
     pub fn new(mountpoint: &Path, options: &[&OsStr]) -> io::Result<Channel> {
         let mountpoint = try!(mountpoint.canonicalize());
         with_fuse_args(options, |args| {
@@ -42,6 +46,13 @@ impl Channel {
                 Ok(Channel { mountpoint: mountpoint, fd: fd })
             }
         })
+    }
+
+    pub fn new_from_fd(fd: RawFd, mountpoint: &Path) -> Channel {
+        Channel {
+            fd: fd,
+            mountpoint: mountpoint.to_path_buf(),
+        }
     }
 
     /// Return path of the mounted filesystem
@@ -76,16 +87,17 @@ impl Drop for Channel {
     fn drop(&mut self) {
         // TODO: send ioctl FUSEDEVIOCSETDAEMONDEAD on macOS before closing the fd
         // Close the communication channel to the kernel driver
-        // (closing it before unnmount prevents sync unmount deadlock)
+        // (closing it before unmount prevents sync unmount deadlock)
         unsafe { libc::close(self.fd); }
         // Unmount this channel's mount point
+        #[cfg(feature = "libfuse")]
         let _ = unmount(&self.mountpoint);
     }
 }
 
 #[derive(Clone, Copy, Debug)]
 pub struct ChannelSender {
-    fd: c_int,
+    fd: RawFd,
 }
 
 impl ChannelSender {
@@ -94,7 +106,7 @@ impl ChannelSender {
         let iovecs: Vec<_> = buffer.iter().map(|d| {
             libc::iovec { iov_base: d.as_ptr() as *mut c_void, iov_len: d.len() as size_t }
         }).collect();
-        let rc = unsafe { libc::writev(self.fd, iovecs.as_ptr(), iovecs.len() as c_int) };
+        let rc = unsafe { libc::writev(self.fd, iovecs.as_ptr(), iovecs.len() as RawFd) };
         if rc < 0 {
             Err(io::Error::last_os_error())
         } else {
@@ -112,6 +124,7 @@ impl ReplySender for ChannelSender {
 }
 
 /// Unmount an arbitrary mount point
+#[cfg(feature = "libfuse")]
 pub fn unmount(mountpoint: &Path) -> io::Result<()> {
     // fuse_unmount_compat22 unfortunately doesn't return a status. Additionally,
     // it attempts to call realpath, which in turn calls into the filesystem. So

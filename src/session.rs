@@ -8,6 +8,7 @@
 use std::io;
 use std::ffi::OsStr;
 use std::fmt;
+use std::os::unix::io::RawFd;
 use std::path::{PathBuf, Path};
 use thread_scoped::{scoped, JoinGuard};
 use libc::{EAGAIN, EINTR, ENODEV, ENOENT};
@@ -43,6 +44,7 @@ pub struct Session<FS: Filesystem> {
 
 impl<FS: Filesystem> Session<FS> {
     /// Create a new session by mounting the given filesystem to the given mountpoint
+    #[cfg(feature = "libfuse")]
     pub fn new(filesystem: FS, mountpoint: &Path, options: &[&OsStr]) -> io::Result<Session<FS>> {
         info!("Mounting {}", mountpoint.display());
         Channel::new(mountpoint, options).map(|ch| {
@@ -55,6 +57,18 @@ impl<FS: Filesystem> Session<FS> {
                 destroyed: false,
             }
         })
+    }
+
+    /// Create a new session by using a file descriptor "/dev/fuse"
+    pub fn new_from_fd(filesystem: FS, fd: RawFd, mountpoint: &Path) -> Session<FS> {
+        Session {
+            filesystem: filesystem,
+            ch: Channel::new_from_fd(fd, mountpoint),
+            proto_major: 0,
+            proto_minor: 0,
+            initialized: false,
+            destroyed: false,
+        }
     }
 
     /// Return path of the mounted filesystem
@@ -138,6 +152,7 @@ impl<'a> Drop for BackgroundSession<'a> {
         info!("Unmounting {}", self.mountpoint.display());
         // Unmounting the filesystem will eventually end the session loop,
         // drop the session and hence end the background thread.
+        #[cfg(feature = "libfuse")]
         match channel::unmount(&self.mountpoint) {
             Ok(()) => (),
             Err(err) => error!("Failed to unmount {}: {}", self.mountpoint.display(), err),
