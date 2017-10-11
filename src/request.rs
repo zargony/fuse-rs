@@ -14,6 +14,7 @@ use kernel::consts::*;
 use kernel::fuse_opcode::*;
 use reply::{Reply, ReplyRaw, ReplyEmpty, ReplyDirectory};
 use session::{MAX_WRITE_SIZE, Session};
+use std::slice;
 
 /// We generally support async reads
 #[cfg(not(target_os = "macos"))]
@@ -410,7 +411,15 @@ impl<'a> Request<'a> {
             },
             FUSE_BATCH_FORGET => {
                 let arg: &fuse_batch_forget_in = data.fetch();
-                self.reply::<ReplyEmpty>().error(ENOSYS);
+                let data = data.fetch_data();
+                assert!(data.len() / mem::size_of::<fuse_forget_data>() == arg.count as usize);
+
+                let inodes : &[fuse_forget_data] = unsafe {
+                    slice::from_raw_parts(data.as_ptr() as *const fuse_forget_data, arg.count as usize)
+                };
+
+                debug!("FUSE_BATCH_FORGET({}) count {}", self.header.unique, arg.count);
+                se.filesystem.forget_multi(self, inodes); // no reply
             },
             FUSE_FALLOCATE => {
                 let arg: &fuse_fallocate_in = data.fetch();

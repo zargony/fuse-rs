@@ -341,6 +341,13 @@ pub struct fuse_batch_forget_in {                       // since ABI 7.16
 
 #[repr(C)]
 #[derive(Debug)]
+pub struct fuse_forget_data {                       // since ABI 7.16
+    pub ino: u64,
+    pub nlookup: u64,
+}
+
+#[repr(C)]
+#[derive(Debug)]
 pub struct fuse_getattr_in {                            // since ABI 7.9
     pub getattr_flags: u32,
     pub dummy: u32,
