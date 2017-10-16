@@ -4,7 +4,7 @@
 //! perform.
 
 use std::mem;
-use libc::{EIO, ENOSYS, EPROTO};
+use libc::{EIO, ENOSYS, EPROTO, UTIME_NOW};
 use time::Timespec;
 use argument::ArgumentIterator;
 use channel::ChannelSender;
@@ -44,6 +44,58 @@ pub struct Request<'a> {
     header: &'a fuse_in_header,
     /// Operation-specific data payload
     data: &'a [u8],
+}
+
+/// A file timestamp.
+#[derive(Clone, Copy, Debug, Hash, PartialEq)]
+pub enum UtimeSpec {
+#[cfg(target_os = "linux")]
+    /// File timestamp is set to the current time.
+    Now,
+    /// The corresponding file timestamp is left unchanged.
+    Omit,
+    /// File timestamp is set to value
+    Time(Timespec)
+}
+
+#[cfg(target_os = "linux")]
+fn atime_to_timespec(arg: &fuse_setattr_in) -> UtimeSpec {
+    if arg.valid & FATTR_ATIME_NOW != 0 {
+        UtimeSpec::Now
+    } else if arg.valid & FATTR_ATIME != 0 {
+        UtimeSpec::Time(Timespec::new(arg.atime, arg.atimensec))
+    } else {
+        UtimeSpec::Omit
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn mtime_to_timespec(arg: &fuse_setattr_in) -> UtimeSpec {
+    if arg.valid & FATTR_MTIME_NOW != 0 {
+        UtimeSpec::Now
+    } else if arg.valid & FATTR_MTIME != 0 {
+        UtimeSpec::Time(Timespec::new(arg.mtime, arg.mtimensec))
+    } else {
+        UtimeSpec::Omit
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn atime_to_timespec(arg: &fuse_setattr_in) -> UtimeSpec {
+    if arg.valid & FATTR_ATIME != 0 {
+        UtimeSpec::Time(Timespec::new(arg.atime, arg.atimensec))
+    } else {
+        UtimeSpec::Omit
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn mtime_to_timespec(arg: &fuse_setattr_in) -> UtimeSpec {
+    if arg.valid & FATTR_MTIME != 0 {
+        UtimeSpec::Time(Timespec::new(arg.mtime, arg.mtimensec))
+    } else {
+        UtimeSpec::Omit
+    }
 }
 
 impl<'a> Request<'a> {
@@ -176,14 +228,8 @@ impl<'a> Request<'a> {
                     0 => None,
                     _ => Some(arg.size),
                 };
-                let atime = match arg.valid & FATTR_ATIME {
-                    0 => None,
-                    _ => Some(Timespec::new(arg.atime, arg.atimensec)),
-                };
-                let mtime = match arg.valid & FATTR_MTIME {
-                    0 => None,
-                    _ => Some(Timespec::new(arg.mtime, arg.mtimensec)),
-                };
+                let atime = atime_to_timespec(arg);
+                let mtime = mtime_to_timespec(arg);
                 let fh = match arg.valid & FATTR_FH {
                     0 => None,
                     _ => Some(arg.fh),
