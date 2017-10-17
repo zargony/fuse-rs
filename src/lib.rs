@@ -22,7 +22,7 @@ use time::Timespec;
 pub use kernel::FUSE_ROOT_ID;
 pub use kernel::consts;
 pub use reply::{Reply, ReplyEmpty, ReplyData, ReplyEntry, ReplyAttr, ReplyOpen};
-pub use reply::{ReplyWrite, ReplyStatfs, ReplyCreate, ReplyLock, ReplyBmap, ReplyDirectory};
+pub use reply::{ReplyWrite, ReplyStatfs, ReplyCreate, ReplyLock, ReplyBmap, ReplyDirectory, ReplyDirectoryPlus};
 pub use reply::{ReplyXattr, ReplyIoctl};
 #[cfg(target_os = "macos")]
 pub use reply::ReplyXTimes;
@@ -175,6 +175,11 @@ pub trait Filesystem {
         reply.error(ENOSYS);
     }
 
+    /// Rename a file.
+    fn rename2(&mut self, _req: &Request, _parent: u64, _name: &OsStr, _newparent: u64, _newname: &OsStr, _flags: u32, reply: ReplyEmpty) {
+        reply.error(ENOSYS);
+    }
+
     /// Create a hard link.
     fn link(&mut self, _req: &Request, _ino: u64, _newparent: u64, _newname: &OsStr, reply: ReplyEntry) {
         reply.error(ENOSYS);
@@ -265,6 +270,16 @@ pub trait Filesystem {
     fn readdir(&mut self, _req: &Request, _ino: u64, _fh: u64, _offset: i64, reply: ReplyDirectory) {
         reply.error(ENOSYS);
     }
+
+    /// Read directory.
+    /// Send a buffer filled using buffer.fill(), with size not exceeding the
+    /// requested size. Send an empty buffer on end of stream. fh will contain the
+    /// value set by the opendir method, or will be undefined if the opendir method
+    /// didn't set any value.
+    fn readdirplus(&mut self, _req: &Request, _ino: u64, _fh: u64, _offset: i64, reply: ReplyDirectoryPlus) {
+        reply.error(ENOSYS);
+    }
+
 
     /// Release an open directory.
     /// For every opendir call there will be exactly one releasedir call. fh will

@@ -12,7 +12,7 @@ use Filesystem;
 use kernel::*;
 use kernel::consts::*;
 use kernel::fuse_opcode::*;
-use reply::{Reply, ReplyRaw, ReplyEmpty, ReplyDirectory};
+use reply::{Reply, ReplyRaw, ReplyEmpty, ReplyDirectory, ReplyDirectoryPlus};
 use session::{MAX_WRITE_SIZE, Session};
 use std::slice;
 
@@ -165,6 +165,8 @@ impl<'a> Request<'a> {
                     max_background: 0,
                     congestion_threshold: 0,
                     max_write: MAX_WRITE_SIZE as u32,       // use a max write size that fits into the session's buffer
+                    time_gran: 1,
+                    reserved: [0; 9]
                 };
                 debug!("INIT({}) response: ABI {}.{}, flags {:#x}, max readahead {}, max write {}", self.header.unique, init.major, init.minor, init.flags, init.max_readahead, init.max_write);
                 se.initialized = true;
@@ -302,6 +304,13 @@ impl<'a> Request<'a> {
                 debug!("RENAME({}) parent {:#018x}, name {:?}, newparent {:#018x}, newname {:?}", self.header.unique, self.header.nodeid, name, arg.newdir, newname);
                 se.filesystem.rename(self, self.header.nodeid, &name, arg.newdir, &newname, self.reply());
             }
+            FUSE_RENAME2 => {
+                let arg: &fuse_rename2_in = data.fetch();
+                let name = data.fetch_str();
+                let newname = data.fetch_str();
+                debug!("RENAME2({}) parent {:#018x}, name {:?}, newparent {:#018x}, newname {:?}, flags {:?}", self.header.unique, self.header.nodeid, name, arg.newdir, newname, arg.flags);
+                se.filesystem.rename2(self, self.header.nodeid, &name, arg.newdir, &newname, arg.flags, self.reply());
+            }
             FUSE_LINK => {
                 let arg: &fuse_link_in = data.fetch();
                 let newname = data.fetch_str();
@@ -357,6 +366,11 @@ impl<'a> Request<'a> {
                 let arg: &fuse_read_in = data.fetch();
                 debug!("READDIR({}) ino {:#018x}, fh {}, offset {}, size {}", self.header.unique, self.header.nodeid, arg.fh, arg.offset, arg.size);
                 se.filesystem.readdir(self, self.header.nodeid, arg.fh, arg.offset, ReplyDirectory::new(self.header.unique, self.ch, arg.size as usize));
+            }
+            FUSE_READDIRPLUS => {
+                let arg: &fuse_read_in = data.fetch();
+                debug!("READDIRPLUS({}) ino {:#018x}, fh {}, offset {}, size {}", self.header.unique, self.header.nodeid, arg.fh, arg.offset, arg.size);
+                se.filesystem.readdirplus(self, self.header.nodeid, arg.fh, arg.offset, ReplyDirectoryPlus::new(self.header.unique, self.ch, arg.size as usize));
             }
             FUSE_RELEASEDIR => {
                 let arg: &fuse_release_in = data.fetch();
@@ -446,13 +460,13 @@ impl<'a> Request<'a> {
                 }
             },
             FUSE_POLL => {
-                let arg: &fuse_poll_in = data.fetch();
+                let _arg: &fuse_poll_in = data.fetch();
                 //debug!("IOCTL({}) ino {:#018x}, fh {}, flags {}, in_size {}, out_size {}", self.header.unique, self.header.nodeid, arg.fh, arg.in_size, arg.out_size);
                 //se.filesystem.poll(self, self.header.nodeid, arg.fh, arg.flags, arg.in_size, arg.out_size, self.reply());
                 self.reply::<ReplyEmpty>().error(ENOSYS);
             },
             FUSE_NOTIFY_REPLY => {
-                let arg: &fuse_notify_retrieve_in = data.fetch();
+                let _arg: &fuse_notify_retrieve_in = data.fetch();
                 self.reply::<ReplyEmpty>().error(ENOSYS);
             },
             FUSE_BATCH_FORGET => {
@@ -492,7 +506,7 @@ impl<'a> Request<'a> {
                 se.filesystem.getxtimes(self, self.header.nodeid, self.reply());
             },
             CUSE_INIT => {
-                let arg: &cuse_init_in = data.fetch();
+                let _arg: &cuse_init_in = data.fetch();
                 self.reply::<ReplyEmpty>().error(ENOSYS);
             },
         }

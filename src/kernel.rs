@@ -22,7 +22,7 @@
 
 // We currently target ABI 7.19, which is a bit conservative, but works on all platforms
 pub const FUSE_KERNEL_VERSION: u32 = 7;
-pub const FUSE_KERNEL_MINOR_VERSION: u32 = 19;
+pub const FUSE_KERNEL_MINOR_VERSION: u32 = 23;
 
 pub const FUSE_ROOT_ID: u64 = 1;
 
@@ -89,6 +89,7 @@ pub mod consts {
     pub const FATTR_ATIME_NOW: u32          = 1 << 7;   // since ABI 7.9
     pub const FATTR_MTIME_NOW: u32          = 1 << 8;   // since ABI 7.9
     pub const FATTR_LOCKOWNER: u32          = 1 << 9;   // since ABI 7.9
+    pub const FATTR_CTIME: u32              = 1 << 10;  // since ABI 7.23
     #[cfg(target_os = "macos")]
     pub const FATTR_CRTIME: u32             = 1 << 28;
     #[cfg(target_os = "macos")]
@@ -123,6 +124,12 @@ pub mod consts {
     pub const FUSE_SPLICE_READ: u32         = 1 << 9;   // since ABI 7.14: kernel supports splice read on the device
     pub const FUSE_FLOCK_LOCKS: u32         = 1 << 10;  // since ABI 7.17: remote locking for BSD style file locks
     pub const FUSE_HAS_IOCTL_DIR: u32       = 1 << 11;  // since ABI 7.18: kernel supports ioctl on directories
+    pub const FUSE_AUTO_INVAL_DATA: u32     = 1 << 12;  // since ABI 7.20: automatically invalidate cached pages
+    pub const FUSE_DO_READDIRPLUS: u32      = 1 << 13;  // since ABI 7.21
+    pub const FUSE_READDIRPLUS_AUTO: u32    = 1 << 14;  // since ABI 7.21
+    pub const FUSE_ASYNC_DIO: u32           = 1 << 15;  // since ABI 7.22
+    pub const FUSE_WRITEBACK_CACHE: u32     = 1 << 16;  // since ABI 7.23
+    pub const FUSE_NO_OPEN_SUPPORT: u32     = 1 << 17;  // since ABI 7.23
     #[cfg(target_os = "macos")]
     pub const FUSE_ALLOCATE: u32            = 1 << 27;
     #[cfg(target_os = "macos")]
@@ -213,6 +220,8 @@ pub enum fuse_opcode {
     FUSE_NOTIFY_REPLY = 41,                             // since ABI 7.15
     FUSE_BATCH_FORGET = 42,                             // since ABI 7.16
     FUSE_FALLOCATE = 43,                                // since ABI 7.19
+    FUSE_READDIRPLUS = 44,                              // since ABI 7.21
+    FUSE_RENAME2 = 45,                                  // since ABI 7.23
     #[cfg(target_os = "macos")]
     FUSE_SETVOLNAME = 61,
     #[cfg(target_os = "macos")]
@@ -269,6 +278,8 @@ impl fuse_opcode {
             41 => Some(fuse_opcode::FUSE_NOTIFY_REPLY),
             42 => Some(fuse_opcode::FUSE_BATCH_FORGET),
             43 => Some(fuse_opcode::FUSE_FALLOCATE),
+            44 => Some(fuse_opcode::FUSE_READDIRPLUS),
+            45 => Some(fuse_opcode::FUSE_RENAME2),
             #[cfg(target_os = "macos")]
             61 => Some(fuse_opcode::FUSE_SETVOLNAME),
             #[cfg(target_os = "macos")]
@@ -395,6 +406,14 @@ pub struct fuse_rename_in {
     pub newdir: u64,
 }
 
+#[repr(C)]
+#[derive(Debug)]
+pub struct fuse_rename2_in {
+  pub newdir: u64,
+  pub flags: u32,
+  pub padding: u32,
+}
+
 #[cfg(target_os = "macos")]
 #[repr(C)]
 #[derive(Debug)]
@@ -420,10 +439,10 @@ pub struct fuse_setattr_in {
     pub lock_owner: u64,                                // since ABI 7.9
     pub atime: i64,
     pub mtime: i64,
-    pub unused2: u64,
+    pub ctime: i64,
     pub atimensec: i32,
     pub mtimensec: i32,
-    pub unused3: u32,
+    pub ctimensec: i32,
     pub mode: u32,
     pub unused4: u32,
     pub uid: u32,
@@ -601,6 +620,8 @@ pub struct fuse_init_out {
     pub max_background: u16,                            // since ABI 7.13
     pub congestion_threshold: u16,                      // since ABI 7.13
     pub max_write: u32,
+    pub time_gran: u32,                                 // since ABI 7.23
+    pub reserved: [u32; 9],                             // since ABI 7.23
 }
 
 
@@ -736,6 +757,13 @@ pub struct fuse_dirent {
     pub namelen: u32,
     pub typ: u32,
     // followed by name of namelen bytes
+}
+
+#[repr(C)]
+#[derive(Debug)]
+pub struct fuse_direntplus {
+  pub entry_out: fuse_entry_out,
+  pub dirent: fuse_dirent,
 }
 
 #[repr(C)]

@@ -19,7 +19,7 @@ use kernel::{fuse_open_out, fuse_write_out, fuse_statfs_out, fuse_lk_out, fuse_b
 use kernel::fuse_getxattr_out;
 #[cfg(target_os = "macos")]
 use kernel::fuse_getxtimes_out;
-use kernel::{fuse_out_header, fuse_dirent};
+use kernel::{fuse_out_header, fuse_dirent, fuse_direntplus};
 use {FileType, FileAttr};
 
 /// Generic reply callback to send data
@@ -608,6 +608,74 @@ impl ReplyDirectory {
             (*pdirent).off = offset;
             (*pdirent).namelen = name.len() as u32;
             (*pdirent).typ = mode_from_kind_and_perm(kind, 0) >> 12;
+            let p = p.offset(mem::size_of_val(&*pdirent) as isize);
+            ptr::copy_nonoverlapping(name.as_ptr(), p, name.len());
+            let p = p.offset(name.len() as isize);
+            ptr::write_bytes(p, 0u8, padlen);
+            let newlen = self.data.len() + entsize;
+            self.data.set_len(newlen);
+        }
+        false
+    }
+
+    /// Reply to a request with the filled directory buffer
+    pub fn ok(mut self) {
+        self.reply.send(0, &[&self.data]);
+    }
+
+    /// Reply to a request with the given error code
+    pub fn error(self, err: c_int) {
+        self.reply.error(err);
+    }
+}
+
+///
+/// DirectoryPlus reply
+///
+#[derive(Debug)]
+pub struct ReplyDirectoryPlus {
+    reply: ReplyRaw<()>,
+    data: Vec<u8>,
+}
+
+impl ReplyDirectoryPlus {
+    /// Creates a new ReplyDirectory with a specified buffer size.
+    pub fn new<S: ReplySender>(unique: u64, sender: S, size: usize) -> ReplyDirectoryPlus {
+        ReplyDirectoryPlus {
+            reply: Reply::new(unique, sender),
+            data: Vec::with_capacity(size),
+        }
+    }
+
+    /// Add an entry to the directory reply buffer. Returns true if the buffer is full.
+    /// A transparent offset value can be provided for each entry. The kernel uses these
+    /// value to request the next entries in further readdir calls
+    pub fn add<T: AsRef<OsStr>>(&mut self, ino: u64, offset: i64, name: T, ttl: &Timespec, attr: &FileAttr, generation: u64) -> bool {
+        let name = name.as_ref().as_bytes();
+        let entlen = mem::size_of::<fuse_direntplus>() + name.len();
+        let entsize = (entlen + mem::size_of::<u64>() - 1) & !(mem::size_of::<u64>() - 1); // 64bit align
+        let padlen = entsize - entlen;
+        if self.data.len() + entsize > self.data.capacity() { return true; }
+        unsafe {
+            let p = self.data.as_mut_ptr().offset(self.data.len() as isize);
+            let pdirentplus: *mut fuse_direntplus = mem::transmute(p);
+
+            (*pdirentplus).entry_out = fuse_entry_out {
+                nodeid: attr.ino,
+                generation: generation,
+                entry_valid: ttl.sec,
+                attr_valid: ttl.sec,
+                entry_valid_nsec: ttl.nsec,
+                attr_valid_nsec: ttl.nsec,
+                attr: fuse_attr_from_attr(attr),
+            };
+
+            let pdirent: *mut fuse_dirent = &mut (*pdirentplus).dirent;
+            (*pdirent).ino = ino;
+            (*pdirent).off = offset;
+            (*pdirent).namelen = name.len() as u32;
+            (*pdirent).typ = mode_from_kind_and_perm(attr.kind, 0) >> 12;
+
             let p = p.offset(mem::size_of_val(&*pdirent) as isize);
             ptr::copy_nonoverlapping(name.as_ptr(), p, name.len());
             let p = p.offset(name.len() as isize);
