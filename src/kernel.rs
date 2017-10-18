@@ -22,7 +22,7 @@
 
 // We currently target ABI 7.19, which is a bit conservative, but works on all platforms
 pub const FUSE_KERNEL_VERSION: u32 = 7;
-pub const FUSE_KERNEL_MINOR_VERSION: u32 = 23;
+pub const FUSE_KERNEL_MINOR_VERSION: u32 = 26;
 
 pub const FUSE_ROOT_ID: u64 = 1;
 
@@ -130,6 +130,9 @@ pub mod consts {
     pub const FUSE_ASYNC_DIO: u32           = 1 << 15;  // since ABI 7.22
     pub const FUSE_WRITEBACK_CACHE: u32     = 1 << 16;  // since ABI 7.23
     pub const FUSE_NO_OPEN_SUPPORT: u32     = 1 << 17;  // since ABI 7.23
+    pub const FUSE_PARALLEL_DIROPS: u32     = 1 << 18;  // since ABI 7.25
+    pub const FUSE_HANDLE_KILLPRIV: u32     = 1 << 19;  // since ABI 7.26
+    pub const FUSE_POSIX_ACL: u32           = 1 << 20;  // since ABI 7.26
     #[cfg(target_os = "macos")]
     pub const FUSE_ALLOCATE: u32            = 1 << 27;
     #[cfg(target_os = "macos")]
@@ -222,6 +225,7 @@ pub enum fuse_opcode {
     FUSE_FALLOCATE = 43,                                // since ABI 7.19
     FUSE_READDIRPLUS = 44,                              // since ABI 7.21
     FUSE_RENAME2 = 45,                                  // since ABI 7.23
+    FUSE_LSEEK = 46,                                    // since ABI 7.24
     #[cfg(target_os = "macos")]
     FUSE_SETVOLNAME = 61,
     #[cfg(target_os = "macos")]
@@ -280,6 +284,7 @@ impl fuse_opcode {
             43 => Some(fuse_opcode::FUSE_FALLOCATE),
             44 => Some(fuse_opcode::FUSE_READDIRPLUS),
             45 => Some(fuse_opcode::FUSE_RENAME2),
+            46 => Some(fuse_opcode::FUSE_LSEEK),
             #[cfg(target_os = "macos")]
             61 => Some(fuse_opcode::FUSE_SETVOLNAME),
             #[cfg(target_os = "macos")]
@@ -819,4 +824,19 @@ pub struct fuse_notify_retrieve_in {                    // since ABI 7.15: match
     pub dummy2: u32,
     pub dummy3: u64,
     pub dummy4: u64,
+}
+
+#[repr(C)]
+#[derive(Debug)]
+pub struct fuse_lseek_in {
+  pub fh: u64,
+  pub offset: i64,
+  pub whence: u32,
+  pub padding: u32,
+}
+
+#[repr(C)]
+#[derive(Debug)]
+pub struct fuse_lseek_out {
+  pub offset: i64,
 }

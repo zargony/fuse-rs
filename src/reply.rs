@@ -14,7 +14,7 @@ use std::marker::PhantomData;
 use std::os::unix::ffi::OsStrExt;
 use libc::{c_int, S_IFIFO, S_IFCHR, S_IFBLK, S_IFDIR, S_IFREG, S_IFLNK, S_IFSOCK, EIO};
 use time::Timespec;
-use kernel::{fuse_attr, fuse_kstatfs, fuse_file_lock, fuse_entry_out, fuse_attr_out};
+use kernel::{fuse_attr, fuse_kstatfs, fuse_file_lock, fuse_entry_out, fuse_attr_out, fuse_lseek_out};
 use kernel::{fuse_open_out, fuse_write_out, fuse_statfs_out, fuse_lk_out, fuse_bmap_out, fuse_ioctl_out};
 use kernel::fuse_getxattr_out;
 #[cfg(target_os = "macos")]
@@ -726,6 +726,34 @@ impl ReplyXattr {
     }
 
     /// Reply to a request with the given error code.
+    pub fn error(self, err: c_int) {
+        self.reply.error(err);
+    }
+}
+
+///
+/// Lseek Reply
+///
+#[derive(Debug)]
+pub struct ReplyLseek {
+    reply: ReplyRaw<fuse_lseek_out>,
+}
+
+impl Reply for ReplyLseek {
+    fn new<S: ReplySender>(unique: u64, sender: S) -> ReplyLseek {
+        ReplyLseek { reply: Reply::new(unique, sender) }
+    }
+}
+
+impl ReplyLseek {
+    /// Reply to a request with seeked offset
+    pub fn offset(self, offset: i64) {
+        self.reply.ok(&fuse_lseek_out {
+            offset: offset,
+        });
+    }
+
+    /// Reply to a request with the given error code
     pub fn error(self, err: c_int) {
         self.reply.error(err);
     }

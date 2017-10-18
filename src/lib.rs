@@ -23,7 +23,7 @@ pub use kernel::FUSE_ROOT_ID;
 pub use kernel::consts;
 pub use reply::{Reply, ReplyEmpty, ReplyData, ReplyEntry, ReplyAttr, ReplyOpen};
 pub use reply::{ReplyWrite, ReplyStatfs, ReplyCreate, ReplyLock, ReplyBmap, ReplyDirectory, ReplyDirectoryPlus};
-pub use reply::{ReplyXattr, ReplyIoctl};
+pub use reply::{ReplyXattr, ReplyIoctl, ReplyLseek};
 #[cfg(target_os = "macos")]
 pub use reply::ReplyXTimes;
 pub use request::{Request, UtimeSpec};
@@ -400,6 +400,10 @@ pub trait Filesystem {
     /// during init to FUSE_XTIMES to enable
     #[cfg(target_os = "macos")]
     fn getxtimes(&mut self, _req: &Request, _ino: u64, reply: ReplyXTimes) {
+        reply.error(ENOSYS);
+    }
+    /// Reposition read/write file offset
+    fn lseek(&mut self, _req: &Request, _ino: u64, _fh: u64, _offset: i64, _whence: u32, reply: ReplyLseek) {
         reply.error(ENOSYS);
     }
 }

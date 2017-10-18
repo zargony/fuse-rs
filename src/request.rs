@@ -18,7 +18,7 @@ use std::slice;
 
 /// We generally support async reads
 #[cfg(not(target_os = "macos"))]
-const INIT_FLAGS: u32 = FUSE_ASYNC_READ | FUSE_EXPORT_SUPPORT | FUSE_BIG_WRITES;
+const INIT_FLAGS: u32 = FUSE_ASYNC_READ | FUSE_EXPORT_SUPPORT | FUSE_BIG_WRITES | FUSE_POSIX_ACL;
 
 /// On macOS, we additionally support case insensitiveness, volume renames and xtimes
 /// TODO: we should eventually let the filesystem implementation decide which flags to set
@@ -485,6 +485,11 @@ impl<'a> Request<'a> {
                 let arg: &fuse_fallocate_in = data.fetch();
                 debug!("FALLOCATE({}) ino {:#018x}, fh {}, offset {}, length {}, mode {}", self.header.unique, self.header.nodeid, arg.fh, arg.offset, arg.length, arg.mode);
                 se.filesystem.fallocate(self, self.header.nodeid, arg.fh, arg.offset, arg.length, arg.mode, self.reply());
+            },
+            FUSE_LSEEK => {
+                let arg: &fuse_lseek_in = data.fetch();
+                debug!("LSEEK({}) fh {}, offset {}, whence {}", self.header.unique, arg.fh, arg.offset, arg.whence);
+                se.filesystem.lseek(self, self.header.nodeid, arg.fh, arg.offset, arg.whence, self.reply());
             },
             #[cfg(target_os = "macos")]
             FUSE_SETVOLNAME => {
