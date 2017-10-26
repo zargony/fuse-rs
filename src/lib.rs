@@ -16,6 +16,7 @@ use std::convert::AsRef;
 use std::io;
 use std::ffi::OsStr;
 use std::path::Path;
+use std::os::unix::io::RawFd;
 use libc::{c_int, ENOSYS};
 use time::Timespec;
 
@@ -23,7 +24,7 @@ pub use kernel::FUSE_ROOT_ID;
 pub use kernel::consts;
 pub use reply::{Reply, ReplyEmpty, ReplyData, ReplyEntry, ReplyAttr, ReplyOpen};
 pub use reply::{ReplyWrite, ReplyStatfs, ReplyCreate, ReplyLock, ReplyBmap, ReplyDirectory, ReplyDirectoryPlus};
-pub use reply::{ReplyXattr, ReplyIoctl, ReplyLseek};
+pub use reply::{ReplyXattr, ReplyIoctl, ReplyLseek, ReplyRead};
 #[cfg(target_os = "macos")]
 pub use reply::ReplyXTimes;
 pub use request::{Request, UtimeSpec};
@@ -37,6 +38,7 @@ mod libfuse;
 mod reply;
 mod request;
 mod session;
+mod sys;
 
 /// File types
 #[derive(Clone, Copy, Debug, Hash, PartialEq)]
@@ -204,7 +206,7 @@ pub trait Filesystem {
     /// return value of the read system call will reflect the return value of this
     /// operation. fh will contain the value set by the open method, or will be undefined
     /// if the open method didn't set any value.
-    fn read(&mut self, _req: &Request, _ino: u64, _fh: u64, _offset: i64, _size: u32, reply: ReplyData) {
+    fn read(&mut self, _req: &Request, _ino: u64, _fh: u64, _offset: i64, _size: u32, reply: ReplyRead) {
         reply.error(ENOSYS);
     }
 
@@ -214,7 +216,7 @@ pub trait Filesystem {
     /// which case the return value of the write system call will reflect the return
     /// value of this operation. fh will contain the value set by the open method, or
     /// will be undefined if the open method didn't set any value.
-    fn write(&mut self, _req: &Request, _ino: u64, _fh: u64, _offset: i64, _data: &[u8], _flags: u32, reply: ReplyWrite) {
+    fn write(&mut self, _req: &Request, _ino: u64, _fh: u64, _offset: i64, _source_file: Option<RawFd>, _data: &[u8], _size: u32, _flags: u32, reply: ReplyWrite) {
         reply.error(ENOSYS);
     }
 
@@ -412,7 +414,7 @@ pub trait Filesystem {
 /// not return until the filesystem is unmounted.
 #[cfg(feature = "libfuse")]
 pub fn mount<FS: Filesystem, P: AsRef<Path>>(filesystem: FS, mountpoint: &P, options: &[&OsStr]) -> io::Result<()>{
-    Session::new(filesystem, mountpoint.as_ref(), options).and_then(|mut se| se.run())
+    Session::new(filesystem, mountpoint.as_ref(), options, false).and_then(|mut se| se.run())
 }
 
 /// Mount the given filesystem to the given mountpoint. This function spawns
@@ -422,5 +424,5 @@ pub fn mount<FS: Filesystem, P: AsRef<Path>>(filesystem: FS, mountpoint: &P, opt
 /// be unmounted.
 #[cfg(feature = "libfuse")]
 pub unsafe fn spawn_mount<'a, FS: Filesystem+Send+'a, P: AsRef<Path>>(filesystem: FS, mountpoint: &P, options: &[&OsStr]) -> io::Result<BackgroundSession<'a>> {
-    Session::new(filesystem, mountpoint.as_ref(), options).and_then(|se| se.spawn())
+    Session::new(filesystem, mountpoint.as_ref(), options, false).and_then(|se| se.spawn())
 }

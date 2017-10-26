@@ -180,7 +180,7 @@ pub mod consts {
 }
 
 #[repr(C)]
-#[derive(Debug)]
+#[derive(Debug,PartialEq)]
 pub enum fuse_opcode {
     FUSE_LOOKUP = 1,
     FUSE_FORGET = 2,                                    // no reply

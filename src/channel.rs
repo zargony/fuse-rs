@@ -3,10 +3,11 @@
 //! Raw communication channel to the FUSE kernel driver.
 
 use std::io;
+use sys;
 use std::ffi::{CString, CStr, OsStr};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{PathBuf, Path};
-use libc::{self, c_int, c_void, size_t};
+use libc::{self, c_int, c_void, size_t, F_SETPIPE_SZ, SPLICE_F_MOVE, SPLICE_F_NONBLOCK};
 use std::os::unix::io::RawFd;
 #[cfg(feature = "libfuse")]
 use libfuse::{fuse_args, fuse_mount_compat25};
@@ -26,7 +27,17 @@ fn with_fuse_args<T, F: FnOnce(&fuse_args) -> T>(options: &[&OsStr], f: F) -> T 
 #[derive(Debug)]
 pub struct Channel {
     mountpoint: PathBuf,
-    fd: RawFd,
+    pub fd: RawFd,
+    pub read_pipe_fd: RawFd,
+    pub write_pipe_fd: RawFd,
+}
+
+fn create_pipe(buffer_size: usize) -> io::Result<[RawFd; 2]> {
+    let pipe = try!(sys::pipe());
+    if sys::DEFAULT_PIPE_SIZE != buffer_size {
+        try!(sys::fcntl(pipe[0], F_SETPIPE_SZ, buffer_size + 4096));
+    }
+    Ok(pipe)
 }
 
 impl Channel {
@@ -35,24 +46,37 @@ impl Channel {
     /// the given path to the channel. If the channel is dropped, the path is
     /// unmounted.
     #[cfg(feature = "libfuse")]
-    pub fn new(mountpoint: &Path, options: &[&OsStr]) -> io::Result<Channel> {
+    pub fn new(mountpoint: &Path, options: &[&OsStr], buffer_size: usize) -> io::Result<Channel> {
         let mountpoint = try!(mountpoint.canonicalize());
         with_fuse_args(options, |args| {
             let mnt = try!(CString::new(mountpoint.as_os_str().as_bytes()));
+            let pipe = try!(create_pipe(buffer_size));
             let fd = unsafe { fuse_mount_compat25(mnt.as_ptr(), args) };
             if fd < 0 {
+                unsafe {
+                    libc::close(pipe[0]);
+                    libc::close(pipe[1]);
+                };
                 Err(io::Error::last_os_error())
             } else {
-                Ok(Channel { mountpoint: mountpoint, fd: fd })
+                Ok(Channel {
+                    mountpoint: mountpoint,
+                    fd: fd,
+                    read_pipe_fd: pipe[0],
+                    write_pipe_fd: pipe[1],
+                })
             }
         })
     }
 
-    pub fn new_from_fd(fd: RawFd, mountpoint: &Path) -> Channel {
-        Channel {
+    pub fn new_from_fd(fd: RawFd, mountpoint: &Path, buffer_size: usize) -> io::Result<Channel> {
+        let pipe = try!(create_pipe(buffer_size));
+        Ok(Channel {
             fd: fd,
             mountpoint: mountpoint.to_path_buf(),
-        }
+            read_pipe_fd: pipe[0],
+            write_pipe_fd: pipe[1],
+        })
     }
 
     /// Return path of the mounted filesystem
@@ -60,7 +84,7 @@ impl Channel {
         &self.mountpoint
     }
 
-    /// Receives data up to the capacity of the given buffer (can block).
+    /// receives data up to the capacity of the given buffer (can block).
     pub fn receive(&self, buffer: &mut Vec<u8>) -> io::Result<()> {
         let rc = unsafe { libc::read(self.fd, buffer.as_ptr() as *mut c_void, buffer.capacity() as size_t) };
         if rc < 0 {
@@ -69,6 +93,11 @@ impl Channel {
             unsafe { buffer.set_len(rc as usize); }
             Ok(())
         }
+    }
+
+    /// receives data up to the capacity of the given buffer (can block).
+    pub fn receive_splice(&self, buffer_size: usize) -> io::Result<size_t> {
+        Ok(try!(sys::splice(self.fd, None, self.write_pipe_fd, None, buffer_size, 0)))
     }
 
     /// Returns a sender object for this channel. The sender object can be
@@ -88,7 +117,11 @@ impl Drop for Channel {
         // TODO: send ioctl FUSEDEVIOCSETDAEMONDEAD on macOS before closing the fd
         // Close the communication channel to the kernel driver
         // (closing it before unmount prevents sync unmount deadlock)
-        unsafe { libc::close(self.fd); }
+        unsafe {
+            libc::close(self.fd);
+            libc::close(self.read_pipe_fd);
+            libc::close(self.write_pipe_fd);
+        }
         // Unmount this channel's mount point
         #[cfg(feature = "libfuse")]
         let _ = unmount(&self.mountpoint);
@@ -120,6 +153,13 @@ impl ReplySender for ChannelSender {
         if let Err(err) = ChannelSender::send(self, data) {
             error!("Failed to send FUSE reply: {}", err);
         }
+    }
+
+    fn splice(&self, from: RawFd, size: usize) {
+        let res = sys::splice(from, None, self.fd, None, size, SPLICE_F_MOVE|SPLICE_F_NONBLOCK);
+        if let Err(err) = res {
+            error!("Failed to splice FUSE reply: {}", err);
+        };
     }
 }
 

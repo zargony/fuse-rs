@@ -3,8 +3,9 @@
 //! A request represents information about a filesystem operation the kernel driver wants us to
 //! perform.
 
+use sys;
 use std::mem;
-use libc::{EIO, ENOSYS, EPROTO, UTIME_NOW};
+use libc::{EIO, ENOSYS, EPROTO};
 use time::Timespec;
 use argument::ArgumentIterator;
 use channel::ChannelSender;
@@ -12,8 +13,9 @@ use Filesystem;
 use kernel::*;
 use kernel::consts::*;
 use kernel::fuse_opcode::*;
-use reply::{Reply, ReplyRaw, ReplyEmpty, ReplyDirectory, ReplyDirectoryPlus};
+use reply::{Reply, ReplyRaw, ReplyEmpty, ReplyDirectory, ReplyDirectoryPlus, ReplyRead};
 use session::{MAX_WRITE_SIZE, Session};
+use std::os::unix::io::RawFd;
 use std::slice;
 
 /// We generally support async reads
@@ -25,14 +27,32 @@ const INIT_FLAGS: u32 = FUSE_ASYNC_READ | FUSE_EXPORT_SUPPORT | FUSE_BIG_WRITES 
 #[cfg(target_os = "macos")]
 const INIT_FLAGS: u32 = FUSE_ASYNC_READ | FUSE_EXPORT_SUPPORT | FUSE_BIG_WRITES | FUSE_CASE_INSENSITIVE | FUSE_VOL_RENAME | FUSE_XTIMES;
 
+const PAGE_SIZE: usize = 4096;
+
 /// Create a new request from the given buffer
 pub fn request<'a>(ch: ChannelSender, buffer: &'a [u8]) -> Option<Request<'a>> {
     Request::new(ch, buffer)
 }
 
+pub fn request_splice<'a>(ch: ChannelSender, buffer: &'a mut Vec<u8>, pipe_fd: RawFd, size: usize) -> Option<Request<'a>> {
+    Request::new_splice_write(ch, buffer, pipe_fd, size)
+}
+
+// replace by const, when const fn is stable
+#[inline(always)]
+pub fn request_write_header_size() -> usize {
+    return mem::size_of::<fuse_in_header>() + mem::size_of::<fuse_write_in>();
+}
+
+// replace by const, when const fn is stable
+#[inline(always)]
+pub fn read_limit() -> usize {
+    return request_write_header_size() + PAGE_SIZE;
+}
+
 /// Dispatch request to the given filesystem
-pub fn dispatch<FS: Filesystem>(req: &Request, se: &mut Session<FS>) {
-    req.dispatch(se);
+pub fn dispatch<FS: Filesystem>(req: &Request, se: &mut Session<FS>, read_pipe_fd: RawFd, write_pipe_fd: RawFd) {
+    req.dispatch(se, read_pipe_fd, write_pipe_fd);
 }
 
 /// Request data structure
@@ -44,6 +64,8 @@ pub struct Request<'a> {
     header: &'a fuse_in_header,
     /// Operation-specific data payload
     data: &'a [u8],
+    /// Pipe Fd in case of a write request
+    source_fd: Option<RawFd>
 }
 
 /// A file timestamp.
@@ -98,7 +120,88 @@ fn mtime_to_timespec(arg: &fuse_setattr_in) -> UtimeSpec {
     }
 }
 
+fn read_request<'a>(ch: ChannelSender, fd: RawFd, buffer: &'a mut [u8], offset: usize, request_size: usize) -> Option<Request<'a>> {
+    assert!(buffer.len() > request_size);
+    match sys::read(fd, &mut buffer[offset..]) {
+        Ok(_size) => {
+            let mut data = ArgumentIterator::new(&buffer[..request_size]);
+            let req = Request {
+                ch: ch,
+                header: data.fetch(),
+                data: data.fetch_data(),
+                source_fd: None,
+            };
+            if request_size != req.header.len as usize {
+                error!("Fuse request size does not match header length: expected: {}, got: {}", request_size, req.header.len);
+                return None;
+            }
+            return Some(req);
+        }
+        Err(errno) => {
+            error!("Error reading from FUSE pipe ({})", errno);
+            return None;
+        }
+    }
+}
+
 impl<'a> Request<'a> {
+    fn new_splice_write(ch: ChannelSender, buffer: &'a mut Vec<u8>, pipe_fd: RawFd, size: usize) -> Option<Request<'a>> {
+        // Every request always begins with a fuse_in_header struct
+        // followed by arbitrary data depending on which opcode it contains
+        if size < mem::size_of::<fuse_in_header>() {
+            error!("Read of FUSE request shorter then header ({} < {})", buffer.len(), mem::size_of::<fuse_in_header>());
+            return None;
+        }
+
+        // optimisation: read smaller requests in one go
+        if size < read_limit() {
+            return read_request(ch, pipe_fd, buffer.as_mut_slice(), 0, size);
+        }
+
+        match sys::read(pipe_fd, &mut buffer[..request_write_header_size()]) {
+            Ok(size) => {
+                if size < request_write_header_size() {
+                    error!("Short read of FUSE request: {} < {}", size, request_write_header_size());
+                    return None;
+                }
+            }
+            Err(errno) => {
+                error!("Error reading from FUSE pipe ({})", errno);
+                return None;
+            }
+        }
+
+        let not_write_request = {
+            let mut data = ArgumentIterator::new(buffer);
+            let header: &fuse_in_header = data.fetch();
+            match fuse_opcode::from_u32(header.opcode) {
+                Some(opcode) => opcode != FUSE_WRITE,
+                None => {
+                    error!("Received invalid fuse opcode {}: discarding request", header.opcode);
+                    true
+                },
+            }
+        };
+
+        if not_write_request {
+            return read_request(ch, pipe_fd, buffer.as_mut_slice(), request_write_header_size(), size);
+        }
+
+        let mut data = ArgumentIterator::new(buffer);
+        let req = Request {
+            ch: ch,
+            header: data.fetch(),
+            data: data.fetch_data(),
+            source_fd: Some(pipe_fd),
+        };
+
+        if size != req.header.len as usize {
+            error!("Short read of in FUSE write request expected: {}, got: {}", req.header.len, buffer.len());
+        }
+
+        Some(req)
+    }
+
     /// Create a new request from the given buffer
     fn new(ch: ChannelSender, buffer: &'a [u8]) -> Option<Request<'a>> {
         // Every request always begins with a fuse_in_header struct
@@ -112,6 +215,7 @@ impl<'a> Request<'a> {
             ch: ch,
             header: data.fetch(),
             data: data.fetch_data(),
+            source_fd: None,
         };
         if buffer.len() < req.header.len as usize {
             error!("Short read of FUSE request ({} < {})", buffer.len(), req.header.len);
@@ -123,7 +227,7 @@ impl<'a> Request<'a> {
     /// Dispatch request to the given filesystem.
     /// This calls the appropriate filesystem operation method for the
     /// request and sends back the returned reply to the kernel
-    fn dispatch<FS: Filesystem>(&self, se: &mut Session<FS>) {
+    fn dispatch<FS: Filesystem>(&self, se: &mut Session<FS>, read_pipe_fd: RawFd, write_pipe_fd: RawFd) {
         let opcode = match fuse_opcode::from_u32(self.header.opcode) {
             Some(op) => op,
             None => {
@@ -325,14 +429,20 @@ impl<'a> Request<'a> {
             FUSE_READ => {
                 let arg: &fuse_read_in = data.fetch();
                 debug!("READ({}) ino {:#018x}, fh {}, offset {}, size {}", self.header.unique, self.header.nodeid, arg.fh, arg.offset, arg.size);
-                se.filesystem.read(self, self.header.nodeid, arg.fh, arg.offset, arg.size, self.reply());
+                let reply = ReplyRead::new(self.header.unique, self.ch, read_pipe_fd, write_pipe_fd);
+                se.filesystem.read(self, self.header.nodeid, arg.fh, arg.offset, arg.size, reply);
             }
             FUSE_WRITE => {
                 let arg: &fuse_write_in = data.fetch();
-                let data = data.fetch_data();
-                assert!(data.len() == arg.size as usize);
+                let data = if self.source_fd.is_some() {
+                    &[]
+                } else {
+                    data.fetch_data()
+                };
+                assert!(self.source_fd.is_some() || data.len() == arg.size as usize);
+
                 debug!("WRITE({}) ino {:#018x}, fh {}, offset {}, size {}, flags {:#x}", self.header.unique, self.header.nodeid, arg.fh, arg.offset, arg.size, arg.write_flags);
-                se.filesystem.write(self, self.header.nodeid, arg.fh, arg.offset, data, arg.write_flags, self.reply());
+                se.filesystem.write(self, self.header.nodeid, arg.fh, arg.offset, self.source_fd, data, arg.size, arg.write_flags, self.reply());
             }
             FUSE_FLUSH => {
                 let arg: &fuse_flush_in = data.fetch();
@@ -391,6 +501,7 @@ impl<'a> Request<'a> {
                 let arg: &fuse_setxattr_in = data.fetch();
                 let name = data.fetch_str();
                 let value = data.fetch_data();
+                debug!("value.len = {}, arg.size = {}", value.len(), arg.size);
                 assert!(value.len() == arg.size as usize);
                 debug!("SETXATTR({}) ino {:#018x}, name {:?}, size {}, flags {:#x}", self.header.unique, self.header.nodeid, name, arg.size, arg.flags);
                 #[cfg(target_os = "macos")] #[inline]

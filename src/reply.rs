@@ -12,7 +12,8 @@ use std::ffi::OsStr;
 use std::fmt;
 use std::marker::PhantomData;
 use std::os::unix::ffi::OsStrExt;
-use libc::{c_int, S_IFIFO, S_IFCHR, S_IFBLK, S_IFDIR, S_IFREG, S_IFLNK, S_IFSOCK, EIO};
+use std::os::unix::io::RawFd;
+use libc::{self, c_int, size_t, c_void, S_IFIFO, S_IFCHR, S_IFBLK, S_IFDIR, S_IFREG, S_IFLNK, S_IFSOCK, EIO, SPLICE_F_MOVE, SPLICE_F_NONBLOCK};
 use time::Timespec;
 use kernel::{fuse_attr, fuse_kstatfs, fuse_file_lock, fuse_entry_out, fuse_attr_out, fuse_lseek_out};
 use kernel::{fuse_open_out, fuse_write_out, fuse_statfs_out, fuse_lk_out, fuse_bmap_out, fuse_ioctl_out};
@@ -20,12 +21,15 @@ use kernel::fuse_getxattr_out;
 #[cfg(target_os = "macos")]
 use kernel::fuse_getxtimes_out;
 use kernel::{fuse_out_header, fuse_dirent, fuse_direntplus};
+use sys;
 use {FileType, FileAttr};
 
 /// Generic reply callback to send data
 pub trait ReplySender: Send + 'static {
     /// Send data.
     fn send(&self, data: &[&[u8]]);
+
+    fn splice(&self, from: RawFd, size: usize);
 }
 
 impl fmt::Debug for Box<ReplySender> {
@@ -158,6 +162,11 @@ impl<T> ReplyRaw<T> {
         });
     }
 
+    fn splice(&mut self, from: RawFd, size: usize) {
+        let sender = self.sender.take().unwrap();
+        sender.splice(from, size);
+    }
+
     /// Reply to a request with the given type
     pub fn ok(mut self, data: &T) {
         as_bytes(data, |bytes| {
@@ -198,6 +207,78 @@ impl ReplyEmpty {
     /// Reply to a request with nothing
     pub fn ok(mut self) {
         self.reply.send(0, &[]);
+    }
+
+    /// Reply to a request with the given error code
+    pub fn error(self, err: c_int) {
+        self.reply.error(err);
+    }
+}
+
+///
+/// Read reply
+///
+#[derive(Debug)]
+pub struct ReplyRead {
+    reply: ReplyRaw<()>,
+    read_pipe_fd: RawFd,
+    write_pipe_fd: RawFd,
+    unique: u64
+}
+
+impl ReplyRead {
+    /// Create a new reply for a read request
+    pub fn new<S: ReplySender>(unique: u64, sender: S, read_pipe_fd: RawFd, write_pipe_fd: RawFd) -> ReplyRead {
+        ReplyRead { reply: Reply::new(unique, sender), read_pipe_fd: read_pipe_fd, write_pipe_fd: write_pipe_fd, unique: unique }
+    }
+
+    /// Reply to a request with the given data
+    pub fn data(mut self, data: &[u8]) {
+        self.reply.send(0, &[data]);
+    }
+
+    /// Reply to a request with a file descriptor
+    pub fn fd(mut self, fd: RawFd, mut offset: i64, size: u32) {
+        let mut header = fuse_out_header {
+            unique: self.unique,
+            len: (mem::size_of::<fuse_out_header>() as u32 + size) as u32,
+            error: 0,
+        };
+
+        let iovec = libc::iovec {
+            iov_base: &mut header as *mut fuse_out_header as *mut c_void,
+            iov_len: mem::size_of::<fuse_out_header>() as size_t,
+        };
+
+        if let Err(err) = sys::vmsplice(self.write_pipe_fd, &iovec, 1, SPLICE_F_NONBLOCK) {
+            return self.reply.error(err.raw_os_error().unwrap());
+        }
+
+        let res = sys::splice(fd,
+                              Some(&mut offset),
+                              self.write_pipe_fd,
+                              None,
+                              size as usize,
+                              SPLICE_F_MOVE|SPLICE_F_NONBLOCK);
+
+        let actual_read = match res {
+            Err(err) => return self.reply.error(err.raw_os_error().unwrap()),
+            Ok(bytes) => bytes as usize,
+        };
+
+        // short read -> fallback to clear pipe in userspace
+        if (size as usize) != actual_read {
+            let mut out = vec![0; actual_read + mem::size_of::<fuse_out_header>()];
+            match sys::read(self.read_pipe_fd, &mut out[..(actual_read + mem::size_of::<fuse_out_header>())]) {
+                Ok(_) => {
+                    self.data(&out[mem::size_of::<fuse_out_header>()..]);
+                    return;
+                },
+                Err(err) => return self.reply.error(err.raw_os_error().unwrap()),
+            };
+        }
+
+        self.reply.splice(self.read_pipe_fd, size as usize + mem::size_of::<fuse_out_header>());
     }
 
     /// Reply to a request with the given error code

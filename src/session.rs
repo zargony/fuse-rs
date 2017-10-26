@@ -21,9 +21,12 @@ use request;
 /// and 128k on other systems.
 pub const MAX_WRITE_SIZE: usize = 16 * 1024 * 1024;
 
+const PAGE_SIZE: usize = 4096;
+
 /// Size of the buffer for reading a request from the kernel. Since the kernel may send
 /// up to MAX_WRITE_SIZE bytes in a write request, we use that value plus some extra space.
-const BUFFER_SIZE: usize = MAX_WRITE_SIZE + 4096;
+const BUFFER_SIZE: usize = MAX_WRITE_SIZE + PAGE_SIZE;
+
 
 /// The session data structure
 #[derive(Debug)]
@@ -40,14 +43,16 @@ pub struct Session<FS: Filesystem> {
     pub initialized: bool,
     /// True if the filesystem was destroyed (destroy operation done)
     pub destroyed: bool,
+    /// True, if splice() syscall should be used for /dev/fuse
+    pub splice_write: bool,
 }
 
 impl<FS: Filesystem> Session<FS> {
     /// Create a new session by mounting the given filesystem to the given mountpoint
     #[cfg(feature = "libfuse")]
-    pub fn new(filesystem: FS, mountpoint: &Path, options: &[&OsStr]) -> io::Result<Session<FS>> {
+    pub fn new(filesystem: FS, mountpoint: &Path, options: &[&OsStr], splice_write: bool) -> io::Result<Session<FS>> {
         info!("Mounting {}", mountpoint.display());
-        Channel::new(mountpoint, options).map(|ch| {
+        Channel::new(mountpoint, options, BUFFER_SIZE).map(|ch| {
             Session {
                 filesystem: filesystem,
                 ch: ch,
@@ -55,20 +60,22 @@ impl<FS: Filesystem> Session<FS> {
                 proto_minor: 0,
                 initialized: false,
                 destroyed: false,
+                splice_write: splice_write,
             }
         })
     }
 
     /// Create a new session by using a file descriptor "/dev/fuse"
-    pub fn new_from_fd(filesystem: FS, fd: RawFd, mountpoint: &Path) -> Session<FS> {
-        Session {
+    pub fn new_from_fd(filesystem: FS, fd: RawFd, mountpoint: &Path, splice_write: bool) -> io::Result<Session<FS>> {
+        Ok(Session {
             filesystem: filesystem,
-            ch: Channel::new_from_fd(fd, mountpoint),
+            ch: try!(Channel::new_from_fd(fd, mountpoint, BUFFER_SIZE)),
             proto_major: 0,
             proto_minor: 0,
             initialized: false,
             destroyed: false,
-        }
+            splice_write: splice_write,
+        })
     }
 
     /// Return path of the mounted filesystem
@@ -81,18 +88,72 @@ impl<FS: Filesystem> Session<FS> {
     /// having multiple buffers (which take up much memory), but the filesystem methods
     /// may run concurrent by spawning threads.
     pub fn run(&mut self) -> io::Result<()> {
-        // Buffer for receiving requests from the kernel. Only one is allocated and
-        // it is reused immediately after dispatching to conserve memory and allocations.
-        let mut buffer: Vec<u8> = Vec::with_capacity(BUFFER_SIZE);
+        if self.splice_write {
+            self.run_splice_write()
+        } else {
+            self.run_no_splice_write()
+        }
+    }
+
+    fn run_no_splice_write(&mut self) -> io::Result<()> {
+        let mut buffer: Vec<u8> = vec![0; BUFFER_SIZE];
+
         loop {
             // Read the next request from the given channel to kernel driver
             // The kernel driver makes sure that we get exactly one request per read
             match self.ch.receive(&mut buffer) {
-                Ok(()) => match request::request(self.ch.sender(), &buffer) {
-                    // Dispatch request
-                    Some(req) => request::dispatch(&req, self),
-                    // Quit loop on illegal request
-                    None => break,
+                Ok(()) => {
+                    match request::request(self.ch.sender(), &buffer) {
+                        // Dispatch request
+                        Some(req) => {
+                            let read_pipe_fd = self.ch.read_pipe_fd;
+                            let write_pipe_fd = self.ch.write_pipe_fd;
+
+                            request::dispatch(&req, self, read_pipe_fd, write_pipe_fd);
+                        },
+                        // Quit loop on illegal request
+                        None => break,
+                    }
+                },
+                Err(err) => match err.raw_os_error() {
+                    // Operation interrupted. Accordingly to FUSE, this is safe to retry
+                    Some(ENOENT) => continue,
+                    // Interrupted system call, retry
+                    Some(EINTR) => continue,
+                    // Explicitly try again
+                    Some(EAGAIN) => continue,
+                    // Filesystem was unmounted, quit the loop
+                    Some(ENODEV) => break,
+                    // Unhandled error
+                    _ => return Err(err),
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn run_splice_write(&mut self) -> io::Result<()> {
+        // Buffer for receiving requests from the kernel. Only one is allocated and
+        // it is reused immediately after dispatching to conserve memory and allocations.
+        // For small requests we copy the whole requests to this buffer
+        let mut buffer: Vec<u8> = vec![0; MAX_WRITE_SIZE];
+
+        loop {
+            // Read the next request from the given channel to kernel driver
+            // The kernel driver makes sure that we get exactly one request per read
+            match self.ch.receive_splice(MAX_WRITE_SIZE) {
+                Ok(size) => {
+                    match request::request_splice(self.ch.sender(), &mut buffer, self.ch.read_pipe_fd, size) {
+                        // Dispatch request
+                        Some(req) => {
+                            let read_pipe_fd = self.ch.read_pipe_fd;
+                            let write_pipe_fd = self.ch.write_pipe_fd;
+
+                            request::dispatch(&req, self, read_pipe_fd, write_pipe_fd);
+                        },
+                        // Quit loop on illegal request
+                        None => break,
+                    }
                 },
                 Err(err) => match err.raw_os_error() {
                     // Operation interrupted. Accordingly to FUSE, this is safe to retry
