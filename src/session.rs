@@ -72,7 +72,9 @@ impl<FS: Filesystem> Session<FS> {
             ch: try!(Channel::new_from_fd(fd, mountpoint, BUFFER_SIZE)),
             proto_major: 0,
             proto_minor: 0,
-            initialized: false,
+            // This hacky in general, but ok for CntrFS,
+            // we need this in CntrFs to support multi-threading.
+            initialized: true,
             destroyed: false,
             splice_write: splice_write,
         })
