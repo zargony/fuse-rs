@@ -148,12 +148,12 @@ pub trait Filesystem {
 
     /// Create file node.
     /// Create a regular file, character device, block device, fifo or socket node.
-    fn mknod(&mut self, _req: &Request, _parent: u64, _name: &OsStr, _mode: u32, _rdev: u32, reply: ReplyEntry) {
+    fn mknod(&mut self, _req: &Request, _parent: u64, _name: &OsStr, _mode: u32, _umask: u32, _rdev: u32, reply: ReplyEntry) {
         reply.error(ENOSYS);
     }
 
     /// Create a directory.
-    fn mkdir(&mut self, _req: &Request, _parent: u64, _name: &OsStr, _mode: u32, reply: ReplyEntry) {
+    fn mkdir(&mut self, _req: &Request, _parent: u64, _name: &OsStr, _mode: u32, _umask: u32, reply: ReplyEntry) {
         reply.error(ENOSYS);
     }
 
@@ -348,7 +348,7 @@ pub trait Filesystem {
     /// structure in <fuse_common.h> for more details. If this method is not
     /// implemented or under Linux kernel versions earlier than 2.6.15, the mknod()
     /// and open() methods will be called instead.
-    fn create(&mut self, _req: &Request, _parent: u64, _name: &OsStr, _mode: u32, _flags: u32, reply: ReplyCreate) {
+    fn create(&mut self, _req: &Request, _parent: u64, _name: &OsStr, _mode: u32, _umask: u32, _flags: u32, reply: ReplyCreate) {
         reply.error(ENOSYS);
     }
 

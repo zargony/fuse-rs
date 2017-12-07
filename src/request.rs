@@ -20,7 +20,7 @@ use std::slice;
 
 /// We generally support async reads
 #[cfg(not(target_os = "macos"))]
-const INIT_FLAGS: u32 = FUSE_ASYNC_READ | FUSE_BIG_WRITES | FUSE_ATOMIC_O_TRUNC | FUSE_POSIX_ACL | FUSE_WRITEBACK_CACHE;
+const INIT_FLAGS: u32 = FUSE_ASYNC_READ | FUSE_BIG_WRITES | FUSE_ATOMIC_O_TRUNC | FUSE_POSIX_ACL | FUSE_WRITEBACK_CACHE | FUSE_DONT_MASK;
 
 /// On macOS, we additionally support case insensitiveness, volume renames and xtimes
 /// TODO: we should eventually let the filesystem implementation decide which flags to set
@@ -376,14 +376,14 @@ impl<'a> Request<'a> {
             FUSE_MKNOD => {
                 let arg: &fuse_mknod_in = data.fetch();
                 let name = data.fetch_str();
-                debug!("MKNOD({}) parent {:#018x}, name {:?}, mode {:#05o}, rdev {}", self.header.unique, self.header.nodeid, name, arg.mode, arg.rdev);
-                se.filesystem.mknod(self, self.header.nodeid, &name, arg.mode, arg.rdev, self.reply());
+                debug!("MKNOD({}) parent {:#018x}, name {:?}, mode {:#05o}, umask {:?}, rdev {}", self.header.unique, self.header.nodeid, name, arg.mode, arg.umask, arg.rdev);
+                se.filesystem.mknod(self, self.header.nodeid, &name, arg.mode, arg.umask, arg.rdev, self.reply());
             }
             FUSE_MKDIR => {
                 let arg: &fuse_mkdir_in = data.fetch();
                 let name = data.fetch_str();
-                debug!("MKDIR({}) parent {:#018x}, name {:?}, mode {:#05o}", self.header.unique, self.header.nodeid, name, arg.mode);
-                se.filesystem.mkdir(self, self.header.nodeid, &name, arg.mode, self.reply());
+                debug!("MKDIR({}) parent {:#018x}, name {:?}, mode {:#05o}, umask {:?}", self.header.unique, self.header.nodeid, name, arg.mode, arg.umask);
+                se.filesystem.mkdir(self, self.header.nodeid, &name, arg.mode, arg.umask, self.reply());
             }
             FUSE_UNLINK => {
                 let name = data.fetch_str();
@@ -534,8 +534,8 @@ impl<'a> Request<'a> {
             FUSE_CREATE => {
                 let arg: &fuse_create_in = data.fetch();
                 let name = data.fetch_str();
-                debug!("CREATE({}) parent {:#018x}, name {:?}, mode {:#05o}, flags {:#x}", self.header.unique, self.header.nodeid, name, arg.mode, arg.flags);
-                se.filesystem.create(self, self.header.nodeid, &name, arg.mode, arg.flags, self.reply());
+                debug!("CREATE({}) parent {:#018x}, name {:?}, mode {:#05o}, umask {:?}, flags {:#x}", self.header.unique, self.header.nodeid, name, arg.mode, arg.umask, arg.flags);
+                se.filesystem.create(self, self.header.nodeid, &name, arg.mode, arg.umask, arg.flags, self.reply());
             }
             FUSE_GETLK => {
                 let arg: &fuse_lk_in = data.fetch();
