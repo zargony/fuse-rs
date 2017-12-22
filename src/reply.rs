@@ -588,7 +588,8 @@ impl ReplyDirectory {
     pub fn add<T: AsRef<OsStr>>(&mut self, ino: u64, offset: i64, kind: FileType, name: T) -> bool {
         let name = name.as_ref().as_bytes();
         let entlen = mem::size_of::<fuse_dirent>() + name.len();
-        let entsize = (entlen + mem::size_of::<u64>() - 1) & !(mem::size_of::<u64>() - 1); // 64bit align
+        let u64size = mem::size_of::<u64>();
+        let entsize = (entlen + u64size - 1) & !(u64size - 1); // 64bit align
         let padlen = entsize - entlen;
         if self.data.len() + entsize > self.data.capacity() {
             return true;
