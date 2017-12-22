@@ -8,7 +8,7 @@
 use std::io;
 use std::ffi::OsStr;
 use std::fmt;
-use std::path::{PathBuf, Path};
+use std::path::{Path, PathBuf};
 use thread_scoped::{scoped, JoinGuard};
 use libc::{EAGAIN, EINTR, ENODEV, ENOENT};
 use channel::{self, Channel};
@@ -45,15 +45,13 @@ impl<FS: Filesystem> Session<FS> {
     /// Create a new session by mounting the given filesystem to the given mountpoint
     pub fn new(filesystem: FS, mountpoint: &Path, options: &[&OsStr]) -> io::Result<Session<FS>> {
         info!("Mounting {}", mountpoint.display());
-        Channel::new(mountpoint, options).map(|ch| {
-            Session {
-                filesystem: filesystem,
-                ch: ch,
-                proto_major: 0,
-                proto_minor: 0,
-                initialized: false,
-                destroyed: false,
-            }
+        Channel::new(mountpoint, options).map(|ch| Session {
+            filesystem: filesystem,
+            ch: ch,
+            proto_major: 0,
+            proto_minor: 0,
+            initialized: false,
+            destroyed: false,
         })
     }
 
@@ -91,7 +89,7 @@ impl<FS: Filesystem> Session<FS> {
                     Some(ENODEV) => break,
                     // Unhandled error
                     _ => return Err(err),
-                }
+                },
             }
         }
         Ok(())
@@ -123,13 +121,18 @@ impl<'a> BackgroundSession<'a> {
     /// Create a new background session for the given session by running its
     /// session loop in a background thread. If the returned handle is dropped,
     /// the filesystem is unmounted and the given session ends.
-    pub unsafe fn new<FS: Filesystem + Send + 'a>(se: Session<FS>) -> io::Result<BackgroundSession<'a>> {
+    pub unsafe fn new<FS: Filesystem + Send + 'a>(
+        se: Session<FS>,
+    ) -> io::Result<BackgroundSession<'a>> {
         let mountpoint = se.mountpoint().to_path_buf();
         let guard = scoped(move || {
             let mut se = se;
             se.run()
         });
-        Ok(BackgroundSession { mountpoint: mountpoint, guard: guard })
+        Ok(BackgroundSession {
+            mountpoint: mountpoint,
+            guard: guard,
+        })
     }
 }
 
@@ -149,6 +152,10 @@ impl<'a> Drop for BackgroundSession<'a> {
 // thread_scoped::JoinGuard
 impl<'a> fmt::Debug for BackgroundSession<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
-        write!(f, "BackgroundSession {{ mountpoint: {:?}, guard: JoinGuard<()> }}", self.mountpoint)
+        write!(
+            f,
+            "BackgroundSession {{ mountpoint: {:?}, guard: JoinGuard<()> }}",
+            self.mountpoint
+        )
     }
 }

@@ -21,7 +21,10 @@ impl<'a> ArgumentIterator<'a> {
     /// Fetch a typed argument
     pub fn fetch<T>(&mut self) -> &'a T {
         let len = mem::size_of::<T>();
-        assert!(len <= self.data.len(), "out of data while fetching typed argument");
+        assert!(
+            len <= self.data.len(),
+            "out of data while fetching typed argument"
+        );
         let bytes = &self.data[..len];
         self.data = &self.data[len..];
         unsafe { mem::transmute(bytes.as_ptr()) }
@@ -29,7 +32,10 @@ impl<'a> ArgumentIterator<'a> {
 
     /// Fetch a (zero-terminated) string (can be non-utf8)
     pub fn fetch_str(&mut self) -> &'a OsStr {
-        let len = self.data.iter().position(|&c| c == 0).expect("out of data while fetching string argument");
+        let len = self.data
+            .iter()
+            .position(|&c| c == 0)
+            .expect("out of data while fetching string argument");
         let bytes = &self.data[..len];
         self.data = &self.data[len + 1..];
         OsStr::from_bytes(&bytes)
@@ -48,16 +54,21 @@ impl<'a> ArgumentIterator<'a> {
     }
 }
 
-
 #[cfg(test)]
 mod test {
     use std::path::Path;
     use super::ArgumentIterator;
 
-    static TEST_DATA: [u8; 12] = [0x66, 0x6f, 0x6f, 0x00, 0x62, 0x61, 0x72, 0x00, 0x62, 0x61, 0x7a, 0x00];
+    static TEST_DATA: [u8; 12] = [
+        0x66, 0x6f, 0x6f, 0x00, 0x62, 0x61, 0x72, 0x00, 0x62, 0x61, 0x7a, 0x00
+    ];
 
     #[repr(C)]
-    struct TestArgument { p1: u8, p2: u8, p3: u16 }
+    struct TestArgument {
+        p1: u8,
+        p2: u8,
+        p3: u16,
+    }
 
     #[test]
     fn generic_argument() {
