@@ -1,19 +1,15 @@
 [package]
-name = "fuse"
+name = "cntr-fuse"
 version = "0.3.1"
-authors = ["Andreas Neuhaus <zargony@zargony.com>"]
+authors = ["Mic92"]
 build = "build.rs"
-description = "Rust library for filesystems in userspace (FUSE)"
-documentation = "https://docs.rs/fuse"
-homepage = "https://github.com/zargony/rust-fuse"
-repository = "https://github.com/zargony/rust-fuse"
+description = "Rust library for filesystems in userspace (FUSE) (fork with functionality needed for the cntr project)"
+homepage = "https://github.com/Mic92/cntr-fuse"
+repository = "https://github.com/Mic92/cntr-fuse"
 readme = "README.md"
 keywords = ["fuse", "filesystem", "system", "bindings"]
 categories = ["api-bindings", "filesystem"]
 license = "MIT"
-
-[badges]
-travis-ci = { repository = "zargony/rust-fuse" }
 
 [build-dependencies]
 pkg-config = "0.3"
