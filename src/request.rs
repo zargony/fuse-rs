@@ -20,7 +20,7 @@ use std::slice;
 
 /// We generally support async reads
 #[cfg(not(target_os = "macos"))]
-const INIT_FLAGS: u32 = FUSE_ASYNC_READ | FUSE_PARALLEL_DIROPS | FUSE_BIG_WRITES | FUSE_ATOMIC_O_TRUNC | FUSE_POSIX_ACL | FUSE_WRITEBACK_CACHE | FUSE_DONT_MASK;
+const INIT_FLAGS: u32 = FUSE_ASYNC_READ | FUSE_PARALLEL_DIROPS | FUSE_ATOMIC_O_TRUNC | FUSE_POSIX_ACL | FUSE_WRITEBACK_CACHE | FUSE_DONT_MASK;
 
 /// On macOS, we additionally support case insensitiveness, volume renames and xtimes
 /// TODO: we should eventually let the filesystem implementation decide which flags to set
