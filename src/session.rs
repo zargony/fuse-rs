@@ -45,12 +45,16 @@ pub struct Session<FS: Filesystem> {
     pub destroyed: bool,
     /// True, if splice() syscall should be used for /dev/fuse
     pub splice_write: bool,
+    /// Number of queued requests in the kernel
+    pub max_background: u16,
+    /// Threshold when waiting fuse users are put into sleep state instead of busy loop
+    pub congestion_threshold: u16
 }
 
 impl<FS: Filesystem> Session<FS> {
     /// Create a new session by mounting the given filesystem to the given mountpoint
     #[cfg(feature = "libfuse")]
-    pub fn new(filesystem: FS, mountpoint: &Path, options: &[&OsStr], splice_write: bool) -> io::Result<Session<FS>> {
+    pub fn new(filesystem: FS, mountpoint: &Path, options: &[&OsStr], splice_write: bool, max_background: u16, congestion_threshold: u16) -> io::Result<Session<FS>> {
         info!("Mounting {}", mountpoint.display());
         Channel::new(mountpoint, options, BUFFER_SIZE).map(|ch| {
             Session {
@@ -61,12 +65,14 @@ impl<FS: Filesystem> Session<FS> {
                 initialized: false,
                 destroyed: false,
                 splice_write: splice_write,
+                max_background: max_background,
+                congestion_threshold: congestion_threshold
             }
         })
     }
 
     /// Create a new session by using a file descriptor "/dev/fuse"
-    pub fn new_from_fd(filesystem: FS, fd: RawFd, mountpoint: &Path, splice_write: bool) -> io::Result<Session<FS>> {
+    pub fn new_from_fd(filesystem: FS, fd: RawFd, mountpoint: &Path, splice_write: bool, max_background: u16, congestion_threshold: u16) -> io::Result<Session<FS>> {
         Ok(Session {
             filesystem: filesystem,
             ch: try!(Channel::new_from_fd(fd, mountpoint, BUFFER_SIZE)),
@@ -77,6 +83,8 @@ impl<FS: Filesystem> Session<FS> {
             initialized: true,
             destroyed: false,
             splice_write: splice_write,
+            max_background: max_background,
+            congestion_threshold: congestion_threshold
         })
     }
 

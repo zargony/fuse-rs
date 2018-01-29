@@ -266,8 +266,8 @@ impl<'a> Request<'a> {
                     minor: FUSE_KERNEL_MINOR_VERSION,
                     max_readahead: arg.max_readahead,       // accept any readahead size
                     flags: arg.flags & INIT_FLAGS,          // use features given in INIT_FLAGS and reported as capable
-                    max_background: 0,
-                    congestion_threshold: 0,
+                    max_background: se.max_background,
+                    congestion_threshold: se.congestion_threshold,
                     max_write: MAX_WRITE_SIZE as u32,       // use a max write size that fits into the session's buffer
                     time_gran: 1,
                     reserved: [0; 9]
