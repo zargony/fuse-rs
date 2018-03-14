@@ -629,6 +629,17 @@ pub struct fuse_init_out {
     pub reserved: [u32; 9],                             // since ABI 7.23
 }
 
+#[repr(C)]
+#[derive(Debug)]
+pub struct fuse_init_out_22 {
+    pub major: u32,
+    pub minor: u32,
+    pub max_readahead: u32,
+    pub flags: u32,
+    pub max_background: u16,                            // since ABI 7.13
+    pub congestion_threshold: u16,                      // since ABI 7.13
+    pub max_write: u32,
+}
 
 #[repr(C)]
 #[derive(Debug)]

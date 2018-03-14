@@ -168,7 +168,7 @@ impl<T> ReplyRaw<T> {
     }
 
     /// Reply to a request with the given type
-    pub fn ok(mut self, data: &T) {
+    pub fn ok<E>(mut self, data: &E) {
         as_bytes(data, |bytes| {
             self.send(0, bytes);
         })

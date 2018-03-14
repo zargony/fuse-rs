@@ -244,8 +244,8 @@ impl<'a> Request<'a> {
                 let arg: &fuse_init_in = data.fetch();
                 debug!("INIT({})   kernel: ABI {}.{}, flags {:#x}, max readahead {}", self.header.unique, arg.major, arg.minor, arg.flags, arg.max_readahead);
                 // We don't support ABI versions before 7.6
-                if arg.major < 7 || (arg.major == 7 && arg.minor < 26) {
-                    error!("Unsupported FUSE ABI version {}.{}. Sorry, your kernel is too old! We need at least linux 4.8", arg.major, arg.minor);
+                if arg.major < 7 || (arg.major == 7 && arg.minor < 6) {
+                    error!("Unsupported FUSE ABI version {}.{}. Sorry, your kernel is too old!", arg.major, arg.minor);
                     reply.error(EPROTO);
                     return;
                 }
@@ -258,23 +258,38 @@ impl<'a> Request<'a> {
                     reply.error(err);
                     return;
                 }
+
                 // Reply with our desired version and settings. If the kernel supports a
                 // larger major version, it'll re-send a matching init message. If it
                 // supports only lower major versions, we replied with an error above.
-                let init = fuse_init_out {
-                    major: FUSE_KERNEL_VERSION,
-                    minor: FUSE_KERNEL_MINOR_VERSION,
-                    max_readahead: arg.max_readahead,       // accept any readahead size
-                    flags: arg.flags & INIT_FLAGS,          // use features given in INIT_FLAGS and reported as capable
-                    max_background: se.max_background,
-                    congestion_threshold: se.congestion_threshold,
-                    max_write: MAX_WRITE_SIZE as u32,       // use a max write size that fits into the session's buffer
-                    time_gran: 1,
-                    reserved: [0; 9]
-                };
-                debug!("INIT({}) response: ABI {}.{}, flags {:#x}, max readahead {}, max write {}", self.header.unique, init.major, init.minor, init.flags, init.max_readahead, init.max_write);
                 se.initialized = true;
-                reply.ok(&init);
+                if arg.minor < 23 {
+                    let init = fuse_init_out_22 {
+                        major: FUSE_KERNEL_VERSION,
+                        minor: FUSE_KERNEL_MINOR_VERSION,
+                        max_readahead: arg.max_readahead,       // accept any readahead size
+                        flags: arg.flags & INIT_FLAGS,          // use features given in INIT_FLAGS and reported as capable
+                        max_background: se.max_background,
+                        congestion_threshold: se.congestion_threshold,
+                        max_write: MAX_WRITE_SIZE as u32,       // use a max write size that fits into the session's buffer
+                    };
+                    debug!("INIT({}) response: ABI {}.{}, flags {:#x}, max readahead {}, max write {}", self.header.unique, init.major, init.minor, init.flags, init.max_readahead, init.max_write);
+                    reply.ok(&init);
+                } else {
+                    let init = fuse_init_out {
+                        major: FUSE_KERNEL_VERSION,
+                        minor: FUSE_KERNEL_MINOR_VERSION,
+                        max_readahead: arg.max_readahead,       // accept any readahead size
+                        flags: arg.flags & INIT_FLAGS,          // use features given in INIT_FLAGS and reported as capable
+                        max_background: se.max_background,
+                        congestion_threshold: se.congestion_threshold,
+                        max_write: MAX_WRITE_SIZE as u32,       // use a max write size that fits into the session's buffer
+                        time_gran: 1,
+                        reserved: [0; 9]
+                    };
+                    debug!("INIT({}) response: ABI {}.{}, flags {:#x}, max readahead {}, max write {}", self.header.unique, init.major, init.minor, init.flags, init.max_readahead, init.max_write);
+                    reply.ok(&init);
+                }
             }
             // Any operation is invalid before initialization
             _ if !se.initialized => {
