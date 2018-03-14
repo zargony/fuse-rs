@@ -1,6 +1,6 @@
 [package]
 name = "cntr-fuse"
-version = "0.3.5"
+version = "0.3.6"
 authors = ["Mic92"]
 build = "build.rs"
 description = "Rust library for filesystems in userspace (FUSE) (fork with functionality needed for the cntr project)"
