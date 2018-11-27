@@ -20,6 +20,7 @@ use std::path::Path;
 use libc::{c_int, ENOSYS};
 use time::Timespec;
 
+pub use channel::unmount;
 pub use fuse_sys::abi::FUSE_ROOT_ID;
 pub use fuse_sys::abi::consts;
 pub use reply::{Reply, ReplyEmpty, ReplyData, ReplyEntry, ReplyAttr, ReplyOpen};
