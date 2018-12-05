@@ -19,7 +19,8 @@ fuse-sys = { path = "../fuse-sys", version = "0.4.0-alpha" }
 libc = "0.2"
 log = "0.3"
 time = "0.1"
-thread-scoped = "1"
+crossbeam = "0.5.0"
 
 [dev-dependencies]
 env_logger = "0.5"
+tempdir = "0.3.7"
