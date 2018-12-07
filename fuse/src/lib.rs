@@ -11,7 +11,7 @@ extern crate libc;
 #[macro_use]
 extern crate log;
 extern crate time;
-extern crate thread_scoped;
+extern crate crossbeam;
 
 use std::convert::AsRef;
 use std::io;
@@ -19,6 +19,7 @@ use std::ffi::OsStr;
 use std::path::Path;
 use libc::{c_int, ENOSYS};
 use time::Timespec;
+pub use crossbeam::thread::{scope, Scope};
 
 pub use fuse_sys::abi::FUSE_ROOT_ID;
 pub use fuse_sys::abi::consts;
@@ -383,6 +384,6 @@ pub fn mount<FS: Filesystem, P: AsRef<Path>>(filesystem: FS, mountpoint: P, opti
 /// and therefore returns immediately. The returned handle should be stored
 /// to reference the mounted filesystem. If it's dropped, the filesystem will
 /// be unmounted.
-pub unsafe fn spawn_mount<'a, FS: Filesystem+Send+'a, P: AsRef<Path>>(filesystem: FS, mountpoint: P, options: &[&OsStr]) -> io::Result<BackgroundSession<'a>> {
-    Session::new(filesystem, mountpoint.as_ref(), options).and_then(|se| se.spawn())
+pub fn spawn_mount<'a, 'b, FS: Filesystem+Send+'a, P: AsRef<Path>>(filesystem: FS, mountpoint: P, options: &[&OsStr], scope: &'b Scope<'a>) -> io::Result<BackgroundSession<'b>> {
+    Session::new(filesystem, mountpoint.as_ref(), options).and_then(|se| se.spawn(&scope))
 }
