@@ -23,6 +23,7 @@ pub use crossbeam::thread::{scope, Scope};
 
 pub use fuse_sys::abi::FUSE_ROOT_ID;
 pub use fuse_sys::abi::consts;
+pub use fuse_sys::ffi::fuse_unmount_compat22;
 pub use reply::{Reply, ReplyEmpty, ReplyData, ReplyEntry, ReplyAttr, ReplyOpen};
 pub use reply::{ReplyWrite, ReplyStatfs, ReplyCreate, ReplyLock, ReplyBmap, ReplyDirectory};
 pub use reply::ReplyXattr;
