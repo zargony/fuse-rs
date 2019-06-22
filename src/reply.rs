@@ -63,9 +63,9 @@ fn time_from_system_time(system_time: &SystemTime) -> Result<(u64, u32), SystemT
 // Some platforms like Linux x86_64 have mode_t = u32, and lint warns of a trivial_numeric_casts.
 // But others like macOS x86_64 have mode_t = u16, requiring a typecast.  So, just silence lint.
 #[allow(trivial_numeric_casts)]
-/// Returns the mode for a given file kind and permission
-fn mode_from_kind_and_perm(kind: FileType, perm: u16) -> u32 {
-    (match kind {
+/// Returns the mode for a given file type and permission
+fn mode_from_type_and_perm(file_type: FileType, perm: u16) -> u32 {
+    (match file_type {
         FileType::NamedPipe => S_IFIFO,
         FileType::CharDevice => S_IFCHR,
         FileType::BlockDevice => S_IFBLK,
@@ -97,7 +97,7 @@ fn fuse_attr_from_attr(attr: &FileAttr) -> fuse_attr {
         mtimensec: mtime_nanos,
         ctimensec: ctime_nanos,
         crtimensec: crtime_nanos,
-        mode: mode_from_kind_and_perm(attr.kind, attr.perm),
+        mode: mode_from_type_and_perm(attr.ftype, attr.perm),
         nlink: attr.nlink,
         uid: attr.uid,
         gid: attr.gid,
@@ -124,7 +124,7 @@ fn fuse_attr_from_attr(attr: &FileAttr) -> fuse_attr {
         atimensec: atime_nanos,
         mtimensec: mtime_nanos,
         ctimensec: ctime_nanos,
-        mode: mode_from_kind_and_perm(attr.kind, attr.perm),
+        mode: mode_from_type_and_perm(attr.ftype, attr.perm),
         nlink: attr.nlink,
         uid: attr.uid,
         gid: attr.gid,
@@ -566,7 +566,7 @@ impl ReplyDirectory {
     /// Add an entry to the directory reply buffer. Returns true if the buffer is full.
     /// A transparent offset value can be provided for each entry. The kernel uses these
     /// value to request the next entries in further readdir calls
-    pub fn add<T: AsRef<OsStr>>(&mut self, ino: u64, offset: i64, kind: FileType, name: T) -> bool {
+    pub fn add<T: AsRef<OsStr>>(&mut self, ino: u64, offset: i64, file_type: FileType, name: T) -> bool {
         let name = name.as_ref().as_bytes();
         let entlen = mem::size_of::<fuse_dirent>() + name.len();
         let entsize = (entlen + mem::size_of::<u64>() - 1) & !(mem::size_of::<u64>() - 1); // 64bit align
@@ -578,7 +578,7 @@ impl ReplyDirectory {
             (*pdirent).ino = ino;
             (*pdirent).off = offset as u64;
             (*pdirent).namelen = name.len() as u32;
-            (*pdirent).typ = mode_from_kind_and_perm(kind, 0) >> 12;
+            (*pdirent).typ = mode_from_type_and_perm(file_type, 0) >> 12;
             let p = p.offset(mem::size_of_val(&*pdirent) as isize);
             ptr::copy_nonoverlapping(name.as_ptr(), p, name.len());
             let p = p.offset(name.len() as isize);
@@ -774,8 +774,24 @@ mod test {
         let reply: ReplyEntry = Reply::new(0xdeadbeef, sender);
         let time = UNIX_EPOCH + Duration::new(0x1234, 0x5678);
         let ttl = Duration::new(0x8765, 0x4321);
-        let attr = FileAttr { ino: 0x11, size: 0x22, blocks: 0x33, atime: time, mtime: time, ctime: time, crtime: time,
-            kind: FileType::RegularFile, perm: 0o644, nlink: 0x55, uid: 0x66, gid: 0x77, rdev: 0x88, flags: 0x99 };
+        let attr = FileAttr {
+            ino: 0x11,
+            size: 0x22,
+            blocks: 0x33,
+            atime: time,
+            mtime: time,
+            ctime: time,
+            #[cfg(target_os = "macos")]
+            crtime: time,
+            ftype: FileType::RegularFile,
+            perm: 0o644,
+            nlink: 0x55,
+            uid: 0x66,
+            gid: 0x77,
+            rdev: 0x88,
+            #[cfg(target_os = "macos")]
+            flags: 0x99,
+        };
         reply.entry(&ttl, &attr, 0xaa);
     }
 
@@ -808,8 +824,24 @@ mod test {
         let reply: ReplyAttr = Reply::new(0xdeadbeef, sender);
         let time = UNIX_EPOCH + Duration::new(0x1234, 0x5678);
         let ttl = Duration::new(0x8765, 0x4321);
-        let attr = FileAttr { ino: 0x11, size: 0x22, blocks: 0x33, atime: time, mtime: time, ctime: time, crtime: time,
-            kind: FileType::RegularFile, perm: 0o644, nlink: 0x55, uid: 0x66, gid: 0x77, rdev: 0x88, flags: 0x99 };
+        let attr = FileAttr {
+            ino: 0x11,
+            size: 0x22,
+            blocks: 0x33,
+            atime: time,
+            mtime: time,
+            ctime: time,
+            #[cfg(target_os = "macos")]
+            crtime: time,
+            ftype: FileType::RegularFile,
+            perm: 0o644,
+            nlink: 0x55,
+            uid: 0x66,
+            gid: 0x77,
+            rdev: 0x88,
+            #[cfg(target_os = "macos")]
+            flags: 0x99,
+        };
         reply.attr(&ttl, &attr);
     }
 
@@ -903,8 +935,24 @@ mod test {
         let reply: ReplyCreate = Reply::new(0xdeadbeef, sender);
         let time = UNIX_EPOCH + Duration::new(0x1234, 0x5678);
         let ttl = Duration::new(0x8765, 0x4321);
-        let attr = FileAttr { ino: 0x11, size: 0x22, blocks: 0x33, atime: time, mtime: time, ctime: time, crtime: time,
-            kind: FileType::RegularFile, perm: 0o644, nlink: 0x55, uid: 0x66, gid: 0x77, rdev: 0x88, flags: 0x99 };
+        let attr = FileAttr {
+            ino: 0x11,
+            size: 0x22,
+            blocks: 0x33,
+            atime: time,
+            mtime: time,
+            ctime: time,
+            #[cfg(target_os = "macos")]
+            crtime: time,
+            ftype: FileType::RegularFile,
+            perm: 0o644,
+            nlink: 0x55,
+            uid: 0x66,
+            gid: 0x77,
+            rdev: 0x88,
+            #[cfg(target_os = "macos")]
+            flags: 0x99,
+        };
         reply.created(&ttl, &attr, 0xaa, 0xbb, 0xcc);
     }
 

@@ -15,6 +15,7 @@ use libc::{c_int, ENOSYS};
 
 pub use fuse_abi::FUSE_ROOT_ID;
 pub use fuse_abi::consts;
+pub use ll::{FileAttr, FileAttrTryFromError, FileType, FileTypeTryFromError};
 pub use reply::{Reply, ReplyEmpty, ReplyData, ReplyEntry, ReplyAttr, ReplyOpen};
 pub use reply::{ReplyWrite, ReplyStatfs, ReplyCreate, ReplyLock, ReplyBmap, ReplyDirectory};
 pub use reply::ReplyXattr;
@@ -28,58 +29,6 @@ mod ll;
 mod reply;
 mod request;
 mod session;
-
-/// File types
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub enum FileType {
-    /// Named pipe (S_IFIFO)
-    NamedPipe,
-    /// Character device (S_IFCHR)
-    CharDevice,
-    /// Block device (S_IFBLK)
-    BlockDevice,
-    /// Directory (S_IFDIR)
-    Directory,
-    /// Regular file (S_IFREG)
-    RegularFile,
-    /// Symbolic link (S_IFLNK)
-    Symlink,
-    /// Unix domain socket (S_IFSOCK)
-    Socket,
-}
-
-/// File attributes
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct FileAttr {
-    /// Inode number
-    pub ino: u64,
-    /// Size in bytes
-    pub size: u64,
-    /// Size in blocks
-    pub blocks: u64,
-    /// Time of last access
-    pub atime: SystemTime,
-    /// Time of last modification
-    pub mtime: SystemTime,
-    /// Time of last change
-    pub ctime: SystemTime,
-    /// Time of creation (macOS only)
-    pub crtime: SystemTime,
-    /// Kind of file (directory, file, pipe, etc)
-    pub kind: FileType,
-    /// Permissions
-    pub perm: u16,
-    /// Number of hard links
-    pub nlink: u32,
-    /// User id
-    pub uid: u32,
-    /// Group id
-    pub gid: u32,
-    /// Rdev
-    pub rdev: u32,
-    /// Flags (macOS only, see chflags(2))
-    pub flags: u32,
-}
 
 /// Filesystem trait.
 ///

@@ -13,13 +13,15 @@ const HELLO_DIR_ATTR: FileAttr = FileAttr {
     atime: UNIX_EPOCH,                                  // 1970-01-01 00:00:00
     mtime: UNIX_EPOCH,
     ctime: UNIX_EPOCH,
+    #[cfg(target_os = "macos")]
     crtime: UNIX_EPOCH,
-    kind: FileType::Directory,
+    ftype: FileType::Directory,
     perm: 0o755,
     nlink: 2,
     uid: 501,
     gid: 20,
     rdev: 0,
+    #[cfg(target_os = "macos")]
     flags: 0,
 };
 
@@ -32,13 +34,15 @@ const HELLO_TXT_ATTR: FileAttr = FileAttr {
     atime: UNIX_EPOCH,                                  // 1970-01-01 00:00:00
     mtime: UNIX_EPOCH,
     ctime: UNIX_EPOCH,
+    #[cfg(target_os = "macos")]
     crtime: UNIX_EPOCH,
-    kind: FileType::RegularFile,
+    ftype: FileType::RegularFile,
     perm: 0o644,
     nlink: 1,
     uid: 501,
     gid: 20,
     rdev: 0,
+    #[cfg(target_os = "macos")]
     flags: 0,
 };
 
