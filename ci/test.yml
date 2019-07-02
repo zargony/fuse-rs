@@ -1,0 +1,19 @@
+parameters:
+  rust_toolchain: stable
+
+steps:
+  - template: install-rust.yml
+    parameters:
+      rust_toolchain: $(rust_toolchain)
+
+  - template: install-fuse.yml
+
+  - checkout: self
+
+  # TODO: allow failure if using nightly
+
+  - bash: cargo build --all --all-targets
+    displayName: Build all targets
+
+  - bash: cargo test --all
+    displayName: Run all tests

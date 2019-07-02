@@ -1,0 +1,16 @@
+steps:
+  - bash: |
+      set -e
+      sudo apt-get update
+      sudo apt-get install -y libfuse-dev pkg-config
+    displayName: Install FUSE (Linux)
+    condition: and(succeeded(), eq(variables['Agent.OS'], 'Linux'))
+
+  - bash: |
+      set -e
+      brew update
+      brew install pkg-config
+      brew tap homebrew/cask
+      brew cask install osxfuse
+    displayName: Install OSXFUSE (macOS)
+    condition: and(succeeded(), eq(variables['Agent.OS'], 'Darwin'))

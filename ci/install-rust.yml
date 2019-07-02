@@ -1,0 +1,23 @@
+parameters:
+  rust_toolchain: stable
+
+steps:
+  - bash: |
+      set -e
+      if ! command -v rustup >/dev/null 2>&1; then
+        curl -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain ${{parameters['rust_toolchain']}}
+        export PATH="$HOME/.cargo/bin:$PATH"
+      else
+        rustup self update
+        rustup default ${{parameters['rust_toolchain']}}
+      fi
+      test -e rust-toolchain && echo "${{parameters['rust_toolchain']}}" > rust-toolchain
+      rustup show
+      echo "##vso[task.setvariable variable=PATH;]$HOME/.cargo/bin:$PATH"
+    displayName: Install Rust toolchain
+
+  - bash: |
+      rustup --version
+      cargo --version
+      rustc --version
+    displayName: Rust version information

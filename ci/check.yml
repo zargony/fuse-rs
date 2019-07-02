@@ -1,0 +1,21 @@
+steps:
+  - template: install-rust.yml
+    parameters:
+      rust_toolchain: stable
+
+  - template: install-fuse.yml
+
+  - checkout: self
+
+  - bash: rustup component add rustfmt && cargo fmt --all -- --check
+    displayName: Run formatting checks
+    # TODO: enable rustfmt check once code formatting is great
+    condition: false
+
+  - bash: cargo check --all --all-targets
+    displayName: Run compiler checks
+
+  - bash: rustup component add clippy && cargo clippy --all --all-targets -- -Dwarnings -Drust-2018-idioms
+    displayName: Run clippy checks
+    # TODO: enable clippy checks once there are no warnings left
+    condition: false

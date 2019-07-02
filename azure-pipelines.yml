@@ -1,0 +1,43 @@
+stages:
+  - stage: Check
+    jobs:
+      - job: All
+        pool:
+          vmImage: ubuntu-16.04
+        steps:
+          - template: ci/check.yml
+
+  - stage: Test
+    dependsOn: Check
+    jobs:
+      - job: Linux
+        pool:
+          vmImage: ubuntu-16.04
+        strategy:
+          matrix:
+            stable:
+              rust_toolchain: stable
+            beta:
+              rust_toolchain: beta
+            nightly:
+              rust_toolchain: nightly
+        steps:
+          - template: ci/test.yml
+            parameters:
+              rust_toolchain: $(rust_toolchain)
+
+      - job: macOS
+        pool:
+          vmImage: macos-10.14
+        strategy:
+          matrix:
+            stable:
+              rust_toolchain: stable
+            beta:
+              rust_toolchain: beta
+            nightly:
+              rust_toolchain: nightly
+        steps:
+          - template: ci/test.yml
+            parameters:
+              rust_toolchain: $(rust_toolchain)

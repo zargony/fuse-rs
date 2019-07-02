@@ -2,7 +2,7 @@
 
 ![Crates.io](https://img.shields.io/crates/l/fuse)
 [![Crates.io](https://img.shields.io/crates/v/fuse)](https://crates.io/crates/fuse)
-[![Build Status](https://travis-ci.com/zargony/rust-fuse.svg?branch=master)](https://travis-ci.com/zargony/rust-fuse)
+[![Build Status](https://dev.azure.com/zargony/rust-fuse/_apis/build/status/zargony.rust-fuse?branchName=master)](https://dev.azure.com/zargony/rust-fuse/_build/latest?definitionId=2&branchName=master)
 
 ## About
 
