@@ -92,9 +92,6 @@ impl Filesystem for HelloFS {
 fn main() {
     env_logger::init();
     let mountpoint = env::args_os().nth(1).unwrap();
-    let options = ["-o", "ro", "-o", "fsname=hello"]
-        .iter()
-        .map(|o| o.as_ref())
-        .collect::<Vec<&OsStr>>();
+    let options = OsStr::new("-o ro -o fsname=hello");
     fuse::mount(HelloFS, mountpoint, &options).unwrap();
 }
