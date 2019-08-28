@@ -4,7 +4,8 @@
 //! advantage of Rust's architecture. The only thing we rely on in the real libfuse are mount
 //! and unmount calls which are needed to establish a fd to talk to the kernel driver.
 
-#![warn(missing_docs, missing_debug_implementations, rust_2018_idioms)]
+#![warn(missing_docs, missing_debug_implementations, rust_2018_idioms, use_extern_macros)]
+#![feature(rustc_private)]
 
 use std::convert::AsRef;
 use std::io;
@@ -22,11 +23,7 @@ pub use reply::ReplyXattr;
 pub use reply::ReplyXTimes;
 pub use request::Request;
 pub use session::{Session, BackgroundSession};
-
-#[cfg(feature = "serde_support")]
-#[macro_use] extern crate serde_derive;
-#[cfg(feature = "serde_support")]
-use serde::{Serialize, Deserialize};
+use serde_derive::{Deserialize, Serialize};
 
 mod channel;
 mod ll;
@@ -55,8 +52,8 @@ pub enum FileType {
 }
 
 /// File attributes
-#[cfg_attr(feature = "serde_support", derive(Serialize, Deserialize))]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "serde_support", derive())]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct FileAttr {
     /// Inode number
     pub ino: u64,
