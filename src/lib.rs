@@ -23,6 +23,11 @@ pub use reply::ReplyXTimes;
 pub use request::Request;
 pub use session::{Session, BackgroundSession};
 
+#[cfg(feature = "serde_support")]
+#[macro_use] extern crate serde_derive;
+#[cfg(feature = "serde_support")]
+use serde::{Serialize, Deserialize};
+
 mod channel;
 mod ll;
 mod reply;
@@ -30,6 +35,7 @@ mod request;
 mod session;
 
 /// File types
+#[cfg_attr(feature = "serde_support", derive(Serialize, Deserialize))]
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum FileType {
     /// Named pipe (S_IFIFO)
@@ -49,6 +55,7 @@ pub enum FileType {
 }
 
 /// File attributes
+#[cfg_attr(feature = "serde_support", derive(Serialize, Deserialize))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FileAttr {
     /// Inode number
