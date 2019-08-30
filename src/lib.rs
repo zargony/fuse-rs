@@ -23,6 +23,7 @@ pub use reply::ReplyXattr;
 pub use reply::ReplyXTimes;
 pub use request::Request;
 pub use session::{Session, BackgroundSession};
+#[cfg(feature = "serde_support")]
 use serde_derive::{Deserialize, Serialize};
 
 mod channel;
@@ -52,8 +53,8 @@ pub enum FileType {
 }
 
 /// File attributes
-#[cfg_attr(feature = "serde_support", derive())]
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "serde_support", derive(Serialize, Deserialize))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FileAttr {
     /// Inode number
     pub ino: u64,
