@@ -15,7 +15,7 @@ use log::{debug, error, warn};
 
 use crate::channel::ChannelSender;
 use crate::ll;
-use crate::reply::{Reply, ReplyRaw, ReplyEmpty, ReplyDirectory};
+use crate::reply::{Reply, ReplyEmpty, ReplyInit, ReplyDirectory};
 use crate::session::{MAX_WRITE_SIZE, Session};
 use crate::Filesystem;
 
@@ -65,7 +65,7 @@ impl<'a> Request<'a> {
         match self.request.operation() {
             // Filesystem initialization
             ll::Operation::Init { arg } => {
-                let reply: ReplyRaw<fuse_init_out> = self.reply();
+                let reply: ReplyInit = self.reply();
                 // We don't support ABI versions before 7.6
                 if arg.major < 7 || (arg.major == 7 && arg.minor < 6) {
                     error!("Unsupported FUSE ABI version {}.{}", arg.major, arg.minor);
@@ -84,17 +84,13 @@ impl<'a> Request<'a> {
                 // Reply with our desired version and settings. If the kernel supports a
                 // larger major version, it'll re-send a matching init message. If it
                 // supports only lower major versions, we replied with an error above.
-                let init = fuse_init_out {
-                    major: FUSE_KERNEL_VERSION,
-                    minor: FUSE_KERNEL_MINOR_VERSION,
-                    max_readahead: arg.max_readahead,       // accept any readahead size
-                    flags: arg.flags & INIT_FLAGS,          // use features given in INIT_FLAGS and reported as capable
-                    unused: 0,
-                    max_write: MAX_WRITE_SIZE as u32,       // use a max write size that fits into the session's buffer
-                };
-                debug!("INIT response: ABI {}.{}, flags {:#x}, max readahead {}, max write {}", init.major, init.minor, init.flags, init.max_readahead, init.max_write);
+                let (major, minor) = (FUSE_KERNEL_VERSION, FUSE_KERNEL_MINOR_VERSION);
+                let max_readahead = arg.max_readahead;      // accept any readahead size
+                let flags = arg.flags & INIT_FLAGS;         // use features given in INIT_FLAGS and reported as capable
+                let max_write = MAX_WRITE_SIZE as u32;      // use a max write size that fits into the session's buffer
+                debug!("INIT response: ABI {}.{}, flags {:#x}, max readahead {}, max write {}", major, minor, flags, max_readahead, max_write);
                 se.initialized = true;
-                reply.ok(&init);
+                reply.init(major, minor, max_readahead, flags, max_write);
             }
             // Any operation is invalid before initialization
             _ if !se.initialized => {
