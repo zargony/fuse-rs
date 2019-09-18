@@ -38,9 +38,9 @@ pub struct FileAttr {
     pub blocks: u64,
     /// Time of last access.
     pub atime: SystemTime,
-    /// Time of last modification.
+    /// Time of last modification of the file's content.
     pub mtime: SystemTime,
-    /// Time of last change.
+    /// Time of last change of metadata or content.
     pub ctime: SystemTime,
     /// macOS only: Time of creation.
     #[cfg(target_os = "macos")]
