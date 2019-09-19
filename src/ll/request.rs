@@ -427,7 +427,7 @@ mod tests {
     use super::*;
 
     #[cfg(target_endian = "big")]
-    const INIT_REQUEST: [u8; 56] = [
+    const INIT_REQUEST: &[u8] = &[
         0x00, 0x00, 0x00, 0x38, 0x00, 0x00, 0x00, 0x1a, // len, opcode
         0xde, 0xad, 0xbe, 0xef, 0xba, 0xad, 0xf0, 0x0d, // unique
         0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, // nodeid
@@ -438,7 +438,7 @@ mod tests {
     ];
 
     #[cfg(target_endian = "little")]
-    const INIT_REQUEST: [u8; 56] = [
+    const INIT_REQUEST: &[u8] = &[
         0x38, 0x00, 0x00, 0x00, 0x1a, 0x00, 0x00, 0x00, // len, opcode
         0x0d, 0xf0, 0xad, 0xba, 0xef, 0xbe, 0xad, 0xde, // unique
         0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11, // nodeid
@@ -466,7 +466,7 @@ mod tests {
 
     #[test]
     fn init() {
-        let req = Request::try_from(&INIT_REQUEST[..]).unwrap();
+        let req = Request::try_from(INIT_REQUEST).unwrap();
         assert_eq!(req.header.len, 56);
         assert_eq!(req.header.opcode, 26);
         assert_eq!(req.unique(), 0xdead_beef_baad_f00d);
@@ -485,7 +485,7 @@ mod tests {
     }
 
     #[cfg(target_endian = "big")]
-    const MKNOD_REQUEST: [u8; 56] = [
+    const MKNOD_REQUEST: &[u8] = &[
         0x00, 0x00, 0x00, 0x38, 0x00, 0x00, 0x00, 0x08, // len, opcode
         0xde, 0xad, 0xbe, 0xef, 0xba, 0xad, 0xf0, 0x0d, // unique
         0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, // nodeid
@@ -496,7 +496,7 @@ mod tests {
     ];
 
     #[cfg(target_endian = "little")]
-    const MKNOD_REQUEST: [u8; 56] = [
+    const MKNOD_REQUEST: &[u8] = &[
         0x38, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, // len, opcode
         0x0d, 0xf0, 0xad, 0xba, 0xef, 0xbe, 0xad, 0xde, // unique
         0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11, // nodeid
@@ -508,7 +508,7 @@ mod tests {
 
     #[test]
     fn mknod() {
-        let req = Request::try_from(&MKNOD_REQUEST[..]).unwrap();
+        let req = Request::try_from(MKNOD_REQUEST).unwrap();
         assert_eq!(req.header.len, 56);
         assert_eq!(req.header.opcode, 8);
         assert_eq!(req.unique(), 0xdead_beef_baad_f00d);
