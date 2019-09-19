@@ -6,7 +6,7 @@
 //! data without cloning the data. A reply *must always* be used (by calling either ok() or
 //! error() exactly once).
 //!
-//! TODO: This module is meant to go away soon in favor of `ll::reply`.
+//! TODO: This module is meant to go away soon in favor of `lowlevel::reply`.
 
 use std::{mem, ptr};
 use std::convert::AsRef;
@@ -21,7 +21,7 @@ use fuse_abi::fuse_dirent;
 use libc::{c_int, S_IFIFO, S_IFCHR, S_IFBLK, S_IFDIR, S_IFREG, S_IFLNK, S_IFSOCK};
 
 use crate::{FileType, FileAttr};
-use crate::ll;
+use crate::lowlevel;
 
 /// Generic reply callback to send data
 pub trait ReplySender: Send + 'static {
@@ -81,14 +81,14 @@ impl Reply for ReplyEmpty {
 impl ReplyEmpty {
     /// Reply to a request with nothing
     pub fn ok(self) {
-        let payload = ll::reply::Data::from(&[][..]);
-        let reply = ll::reply::Reply::new(self.unique, Ok(&payload));
+        let payload = lowlevel::reply::Data::from(&[][..]);
+        let reply = lowlevel::reply::Reply::new(self.unique, Ok(&payload));
         self.sender.send_io_slices(&reply.to_io_slices());
     }
 
     /// Reply to a request with the given error code
     pub fn error(self, err: c_int) {
-        let reply = ll::reply::Reply::<ll::reply::Data<'_>>::new(self.unique, Err(err));
+        let reply = lowlevel::reply::Reply::<lowlevel::reply::Data<'_>>::new(self.unique, Err(err));
         self.sender.send_io_slices(&reply.to_io_slices());
     }
 }
@@ -111,14 +111,14 @@ impl Reply for ReplyData {
 impl ReplyData {
     /// Reply to a request with the given data
     pub fn data(self, data: &[u8]) {
-        let payload = ll::reply::Data::from(data);
-        let reply = ll::reply::Reply::new(self.unique, Ok(&payload));
+        let payload = lowlevel::reply::Data::from(data);
+        let reply = lowlevel::reply::Reply::new(self.unique, Ok(&payload));
         self.sender.send_io_slices(&reply.to_io_slices());
     }
 
     /// Reply to a request with the given error code
     pub fn error(self, err: c_int) {
-        let reply = ll::reply::Reply::<ll::reply::Data<'_>>::new(self.unique, Err(err));
+        let reply = lowlevel::reply::Reply::<lowlevel::reply::Data<'_>>::new(self.unique, Err(err));
         self.sender.send_io_slices(&reply.to_io_slices());
     }
 }
@@ -141,14 +141,14 @@ impl Reply for ReplyInit {
 impl ReplyInit {
     /// Reply to a request with the given entry
     pub fn init(self, major: u32, minor: u32, max_readahead: u32, flags: u32, max_write: u32) {
-        let payload = ll::reply::Init::new(major, minor, max_readahead, flags, max_write);
-        let reply = ll::reply::Reply::new(self.unique, Ok(&payload));
+        let payload = lowlevel::reply::Init::new(major, minor, max_readahead, flags, max_write);
+        let reply = lowlevel::reply::Reply::new(self.unique, Ok(&payload));
         self.sender.send_io_slices(&reply.to_io_slices());
     }
 
     /// Reply to a request with the given error code
     pub fn error(self, err: c_int) {
-        let reply = ll::reply::Reply::<ll::reply::Init>::new(self.unique, Err(err));
+        let reply = lowlevel::reply::Reply::<lowlevel::reply::Init>::new(self.unique, Err(err));
         self.sender.send_io_slices(&reply.to_io_slices());
     }
 }
@@ -171,14 +171,14 @@ impl Reply for ReplyEntry {
 impl ReplyEntry {
     /// Reply to a request with the given entry
     pub fn entry(self, ttl: &Duration, attr: &FileAttr, generation: u64) {
-        let payload = ll::reply::Entry::new(ttl, attr, generation);
-        let reply = ll::reply::Reply::new(self.unique, Ok(&payload));
+        let payload = lowlevel::reply::Entry::new(ttl, attr, generation);
+        let reply = lowlevel::reply::Reply::new(self.unique, Ok(&payload));
         self.sender.send_io_slices(&reply.to_io_slices());
     }
 
     /// Reply to a request with the given error code
     pub fn error(self, err: c_int) {
-        let reply = ll::reply::Reply::<ll::reply::Entry>::new(self.unique, Err(err));
+        let reply = lowlevel::reply::Reply::<lowlevel::reply::Entry>::new(self.unique, Err(err));
         self.sender.send_io_slices(&reply.to_io_slices());
     }
 }
@@ -201,14 +201,14 @@ impl Reply for ReplyAttr {
 impl ReplyAttr {
     /// Reply to a request with the given attribute
     pub fn attr(self, ttl: &Duration, attr: &FileAttr) {
-        let payload = ll::reply::Attr::new(ttl, attr);
-        let reply = ll::reply::Reply::new(self.unique, Ok(&payload));
+        let payload = lowlevel::reply::Attr::new(ttl, attr);
+        let reply = lowlevel::reply::Reply::new(self.unique, Ok(&payload));
         self.sender.send_io_slices(&reply.to_io_slices());
     }
 
     /// Reply to a request with the given error code
     pub fn error(self, err: c_int) {
-        let reply = ll::reply::Reply::<ll::reply::Attr>::new(self.unique, Err(err));
+        let reply = lowlevel::reply::Reply::<lowlevel::reply::Attr>::new(self.unique, Err(err));
         self.sender.send_io_slices(&reply.to_io_slices());
     }
 }
@@ -234,14 +234,14 @@ impl Reply for ReplyXTimes {
 impl ReplyXTimes {
     /// Reply to a request with the given xtimes
     pub fn xtimes(self, bkuptime: SystemTime, crtime: SystemTime) {
-        let payload = ll::reply::XTimes::new(&bkuptime, &crtime);
-        let reply = ll::reply::Reply::new(self.unique, Ok(&payload));
+        let payload = lowlevel::reply::XTimes::new(&bkuptime, &crtime);
+        let reply = lowlevel::reply::Reply::new(self.unique, Ok(&payload));
         self.sender.send_io_slices(&reply.to_io_slices());
     }
 
     /// Reply to a request with the given error code
     pub fn error(self, err: c_int) {
-        let reply = ll::reply::Reply::<ll::reply::XTimes>::new(self.unique, Err(err));
+        let reply = lowlevel::reply::Reply::<lowlevel::reply::XTimes>::new(self.unique, Err(err));
         self.sender.send_io_slices(&reply.to_io_slices());
     }
 }
@@ -264,14 +264,14 @@ impl Reply for ReplyOpen {
 impl ReplyOpen {
     /// Reply to a request with the given open result
     pub fn opened(self, fh: u64, flags: u32) {
-        let payload = ll::reply::Open::new(fh, flags);
-        let reply = ll::reply::Reply::new(self.unique, Ok(&payload));
+        let payload = lowlevel::reply::Open::new(fh, flags);
+        let reply = lowlevel::reply::Reply::new(self.unique, Ok(&payload));
         self.sender.send_io_slices(&reply.to_io_slices());
     }
 
     /// Reply to a request with the given error code
     pub fn error(self, err: c_int) {
-        let reply = ll::reply::Reply::<ll::reply::Open>::new(self.unique, Err(err));
+        let reply = lowlevel::reply::Reply::<lowlevel::reply::Open>::new(self.unique, Err(err));
         self.sender.send_io_slices(&reply.to_io_slices());
     }
 }
@@ -294,14 +294,14 @@ impl Reply for ReplyWrite {
 impl ReplyWrite {
     /// Reply to a request with the given open result
     pub fn written(self, size: u32) {
-        let payload = ll::reply::Write::new(size);
-        let reply = ll::reply::Reply::new(self.unique, Ok(&payload));
+        let payload = lowlevel::reply::Write::new(size);
+        let reply = lowlevel::reply::Reply::new(self.unique, Ok(&payload));
         self.sender.send_io_slices(&reply.to_io_slices());
     }
 
     /// Reply to a request with the given error code
     pub fn error(self, err: c_int) {
-        let reply = ll::reply::Reply::<ll::reply::Write>::new(self.unique, Err(err));
+        let reply = lowlevel::reply::Reply::<lowlevel::reply::Write>::new(self.unique, Err(err));
         self.sender.send_io_slices(&reply.to_io_slices());
     }
 }
@@ -324,14 +324,14 @@ impl Reply for ReplyStatfs {
 impl ReplyStatfs {
     /// Reply to a request with the given open result
     pub fn statfs(self, blocks: u64, bfree: u64, bavail: u64, files: u64, ffree: u64, bsize: u32, namelen: u32, frsize: u32) {
-        let payload = ll::reply::StatFs::new(blocks, bfree, bavail, files, ffree, bsize, namelen, frsize);
-        let reply = ll::reply::Reply::new(self.unique, Ok(&payload));
+        let payload = lowlevel::reply::StatFs::new(blocks, bfree, bavail, files, ffree, bsize, namelen, frsize);
+        let reply = lowlevel::reply::Reply::new(self.unique, Ok(&payload));
         self.sender.send_io_slices(&reply.to_io_slices());
     }
 
     /// Reply to a request with the given error code
     pub fn error(self, err: c_int) {
-        let reply = ll::reply::Reply::<ll::reply::StatFs>::new(self.unique, Err(err));
+        let reply = lowlevel::reply::Reply::<lowlevel::reply::StatFs>::new(self.unique, Err(err));
         self.sender.send_io_slices(&reply.to_io_slices());
     }
 }
@@ -354,14 +354,14 @@ impl Reply for ReplyCreate {
 impl ReplyCreate {
     /// Reply to a request with the given entry
     pub fn created(self, ttl: &Duration, attr: &FileAttr, generation: u64, fh: u64, flags: u32) {
-        let payload = ll::reply::Create::new(ttl, attr, generation, fh, flags);
-        let reply = ll::reply::Reply::new(self.unique, Ok(&payload));
+        let payload = lowlevel::reply::Create::new(ttl, attr, generation, fh, flags);
+        let reply = lowlevel::reply::Reply::new(self.unique, Ok(&payload));
         self.sender.send_io_slices(&reply.to_io_slices());
     }
 
     /// Reply to a request with the given error code
     pub fn error(self, err: c_int) {
-        let reply = ll::reply::Reply::<ll::reply::Create>::new(self.unique, Err(err));
+        let reply = lowlevel::reply::Reply::<lowlevel::reply::Create>::new(self.unique, Err(err));
         self.sender.send_io_slices(&reply.to_io_slices());
     }
 }
@@ -384,14 +384,14 @@ impl Reply for ReplyLock {
 impl ReplyLock {
     /// Reply to a request with the given open result
     pub fn locked(self, start: u64, end: u64, typ: u32, pid: u32) {
-        let payload = ll::reply::Lock::new(start, end, typ, pid);
-        let reply = ll::reply::Reply::new(self.unique, Ok(&payload));
+        let payload = lowlevel::reply::Lock::new(start, end, typ, pid);
+        let reply = lowlevel::reply::Reply::new(self.unique, Ok(&payload));
         self.sender.send_io_slices(&reply.to_io_slices());
     }
 
     /// Reply to a request with the given error code
     pub fn error(self, err: c_int) {
-        let reply = ll::reply::Reply::<ll::reply::Lock>::new(self.unique, Err(err));
+        let reply = lowlevel::reply::Reply::<lowlevel::reply::Lock>::new(self.unique, Err(err));
         self.sender.send_io_slices(&reply.to_io_slices());
     }
 }
@@ -414,14 +414,14 @@ impl Reply for ReplyBmap {
 impl ReplyBmap {
     /// Reply to a request with the given open result
     pub fn bmap(self, block: u64) {
-        let payload = ll::reply::Bmap::new(block);
-        let reply = ll::reply::Reply::new(self.unique, Ok(&payload));
+        let payload = lowlevel::reply::Bmap::new(block);
+        let reply = lowlevel::reply::Reply::new(self.unique, Ok(&payload));
         self.sender.send_io_slices(&reply.to_io_slices());
     }
 
     /// Reply to a request with the given error code
     pub fn error(self, err: c_int) {
-        let reply = ll::reply::Reply::<ll::reply::Bmap>::new(self.unique, Err(err));
+        let reply = lowlevel::reply::Reply::<lowlevel::reply::Bmap>::new(self.unique, Err(err));
         self.sender.send_io_slices(&reply.to_io_slices());
     }
 }
@@ -470,14 +470,14 @@ impl ReplyDirectory {
 
     /// Reply to a request with the filled directory buffer
     pub fn ok(self) {
-        let payload = ll::reply::Data::from(self.data);
-        let reply = ll::reply::Reply::new(self.unique, Ok(&payload));
+        let payload = lowlevel::reply::Data::from(self.data);
+        let reply = lowlevel::reply::Reply::new(self.unique, Ok(&payload));
         self.sender.send_io_slices(&reply.to_io_slices());
     }
 
     /// Reply to a request with the given error code
     pub fn error(self, err: c_int) {
-        let reply = ll::reply::Reply::<ll::reply::Data<'_>>::new(self.unique, Err(err));
+        let reply = lowlevel::reply::Reply::<lowlevel::reply::Data<'_>>::new(self.unique, Err(err));
         self.sender.send_io_slices(&reply.to_io_slices());
     }
 }
@@ -500,21 +500,21 @@ impl Reply for ReplyXattr {
 impl ReplyXattr {
     /// Reply to a request with the size of the xattr.
     pub fn size(self, size: u32) {
-        let payload = ll::reply::XAttrSize::new(size);
-        let reply = ll::reply::Reply::new(self.unique, Ok(&payload));
+        let payload = lowlevel::reply::XAttrSize::new(size);
+        let reply = lowlevel::reply::Reply::new(self.unique, Ok(&payload));
         self.sender.send_io_slices(&reply.to_io_slices());
     }
 
     /// Reply to a request with the data in the xattr.
     pub fn data(self, data: &[u8]) {
-        let payload = ll::reply::Data::from(data);
-        let reply = ll::reply::Reply::new(self.unique, Ok(&payload));
+        let payload = lowlevel::reply::Data::from(data);
+        let reply = lowlevel::reply::Reply::new(self.unique, Ok(&payload));
         self.sender.send_io_slices(&reply.to_io_slices());
     }
 
     /// Reply to a request with the given error code.
     pub fn error(self, err: c_int) {
-        let reply = ll::reply::Reply::<ll::reply::XAttrSize>::new(self.unique, Err(err));
+        let reply = lowlevel::reply::Reply::<lowlevel::reply::XAttrSize>::new(self.unique, Err(err));
         self.sender.send_io_slices(&reply.to_io_slices());
     }
 }
