@@ -209,8 +209,11 @@ impl Create {
 
 /// Reply with data (borrowed or owned)
 // TODO: add data variant based on IoSlice(s)
+#[derive(Debug)]
 pub enum Data<'a> {
+    /// Borrowed data
     Borrowed(&'a [u8]),
+    /// Owned data
     Owned(Vec<u8>),
 }
 
