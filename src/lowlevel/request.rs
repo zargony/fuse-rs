@@ -40,6 +40,7 @@ impl error::Error for RequestError {}
 
 /// Filesystem operation (and arguments) the kernel driver wants us to perform. The fields of each
 /// variant needs to match the actual arguments the kernel driver sends for the specific operation.
+#[allow(missing_docs)]
 #[derive(Debug)]
 pub enum Operation<'a> {
     Lookup {
