@@ -25,10 +25,11 @@ pub use request::Request;
 pub use session::{Session, BackgroundSession};
 
 mod channel;
-mod lowlevel;
 mod reply;
 mod request;
 mod session;
+
+pub mod lowlevel;
 
 /// Filesystem trait.
 ///
