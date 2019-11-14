@@ -7,10 +7,8 @@ use std::ffi::{CString, CStr, OsStr};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{PathBuf, Path};
 use fuse_sys::{fuse_args, fuse_mount_compat25};
-use libc::{self, c_int, c_void, size_t};
+use libc::{self, c_int, c_void, iovec, size_t};
 use log::error;
-
-use crate::reply::ReplySender;
 
 /// Helper function to provide options as a fuse_args struct
 /// (which contains an argc count and an argv pointer)
@@ -90,25 +88,25 @@ pub struct ChannelSender {
     fd: c_int,
 }
 
-impl ChannelSender {
-    /// Send all data in the slice of slice of bytes in a single write (can block).
-    pub fn send(&self, buffer: &[&[u8]]) -> io::Result<()> {
-        let iovecs: Vec<_> = buffer.iter().map(|d| {
-            libc::iovec { iov_base: d.as_ptr() as *mut c_void, iov_len: d.len() as size_t }
-        }).collect();
-        let rc = unsafe { libc::writev(self.fd, iovecs.as_ptr(), iovecs.len() as c_int) };
-        if rc < 0 {
-            Err(io::Error::last_os_error())
-        } else {
-            Ok(())
-        }
+impl io::Write for ChannelSender {
+    fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
+        unimplemented!()
     }
-}
 
-impl ReplySender for ChannelSender {
-    fn send(&self, data: &[&[u8]]) {
-        if let Err(err) = ChannelSender::send(self, data) {
+    fn flush(&mut self) -> io::Result<()> {
+        unimplemented!()
+    }
+
+    fn write_vectored(&mut self, bufs: &[io::IoSlice<'_>]) -> io::Result<usize> {
+        let rc = unsafe {
+            libc::writev(self.fd, bufs.as_ptr() as *const iovec, bufs.len() as c_int)
+        };
+        if rc < 0 {
+            let err = io::Error::last_os_error();
             error!("Failed to send FUSE reply: {}", err);
+            Err(err)
+        } else {
+            Ok(rc as usize)
         }
     }
 }

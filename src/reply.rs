@@ -12,7 +12,7 @@ use std::{mem, ptr};
 use std::convert::AsRef;
 use std::ffi::OsStr;
 use std::fmt;
-use std::io::IoSlice;
+use std::io::Write;
 use std::os::unix::ffi::OsStrExt;
 use std::time::Duration;
 #[cfg(target_os = "macos")]
@@ -24,22 +24,9 @@ use crate::{FileType, FileAttr};
 use crate::lowlevel;
 
 /// Generic reply callback to send data
-pub trait ReplySender: Send + 'static {
-    /// Send data.
-    fn send(&self, data: &[&[u8]]);
+pub trait ReplySender: Write + Send + fmt::Debug + 'static {}
 
-    /// Send io slices.
-    fn send_io_slices(&self, data: &[IoSlice<'_>]) {
-        let data: Vec<&[u8]> = data.iter().map(|buf| &**buf).collect();
-        self.send(&data);
-    }
-}
-
-impl fmt::Debug for Box<dyn ReplySender> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
-        write!(f, "Box<ReplySender>")
-    }
-}
+impl<T: Write + Send + fmt::Debug + 'static> ReplySender for T {}
 
 /// Generic reply trait
 pub trait Reply {
@@ -80,16 +67,16 @@ impl Reply for ReplyEmpty {
 
 impl ReplyEmpty {
     /// Reply to a request with nothing
-    pub fn ok(self) {
+    pub fn ok(mut self) {
         let payload = lowlevel::reply::Data::from(&[][..]);
         let reply = lowlevel::reply::Reply::new(self.unique, Ok(&payload));
-        self.sender.send_io_slices(&reply.to_io_slices());
+        let _ = self.sender.write_vectored(&reply.to_io_slices());
     }
 
     /// Reply to a request with the given error code
-    pub fn error(self, err: c_int) {
+    pub fn error(mut self, err: c_int) {
         let reply = lowlevel::reply::Reply::<lowlevel::reply::Data<'_>>::new(self.unique, Err(err));
-        self.sender.send_io_slices(&reply.to_io_slices());
+        let _ = self.sender.write_vectored(&reply.to_io_slices());
     }
 }
 
@@ -110,16 +97,16 @@ impl Reply for ReplyData {
 
 impl ReplyData {
     /// Reply to a request with the given data
-    pub fn data(self, data: &[u8]) {
+    pub fn data(mut self, data: &[u8]) {
         let payload = lowlevel::reply::Data::from(data);
         let reply = lowlevel::reply::Reply::new(self.unique, Ok(&payload));
-        self.sender.send_io_slices(&reply.to_io_slices());
+        let _ = self.sender.write_vectored(&reply.to_io_slices());
     }
 
     /// Reply to a request with the given error code
-    pub fn error(self, err: c_int) {
+    pub fn error(mut self, err: c_int) {
         let reply = lowlevel::reply::Reply::<lowlevel::reply::Data<'_>>::new(self.unique, Err(err));
-        self.sender.send_io_slices(&reply.to_io_slices());
+        let _ = self.sender.write_vectored(&reply.to_io_slices());
     }
 }
 
@@ -140,16 +127,16 @@ impl Reply for ReplyInit {
 
 impl ReplyInit {
     /// Reply to a request with the given entry
-    pub fn init(self, major: u32, minor: u32, max_readahead: u32, flags: u32, max_write: u32) {
+    pub fn init(mut self, major: u32, minor: u32, max_readahead: u32, flags: u32, max_write: u32) {
         let payload = lowlevel::reply::Init::new(major, minor, max_readahead, flags, max_write);
         let reply = lowlevel::reply::Reply::new(self.unique, Ok(&payload));
-        self.sender.send_io_slices(&reply.to_io_slices());
+        let _ = self.sender.write_vectored(&reply.to_io_slices());
     }
 
     /// Reply to a request with the given error code
-    pub fn error(self, err: c_int) {
+    pub fn error(mut self, err: c_int) {
         let reply = lowlevel::reply::Reply::<lowlevel::reply::Init>::new(self.unique, Err(err));
-        self.sender.send_io_slices(&reply.to_io_slices());
+        let _ = self.sender.write_vectored(&reply.to_io_slices());
     }
 }
 
@@ -170,16 +157,16 @@ impl Reply for ReplyEntry {
 
 impl ReplyEntry {
     /// Reply to a request with the given entry
-    pub fn entry(self, ttl: &Duration, attr: &FileAttr, generation: u64) {
+    pub fn entry(mut self, ttl: &Duration, attr: &FileAttr, generation: u64) {
         let payload = lowlevel::reply::Entry::new(ttl, attr, generation);
         let reply = lowlevel::reply::Reply::new(self.unique, Ok(&payload));
-        self.sender.send_io_slices(&reply.to_io_slices());
+        let _ = self.sender.write_vectored(&reply.to_io_slices());
     }
 
     /// Reply to a request with the given error code
-    pub fn error(self, err: c_int) {
+    pub fn error(mut self, err: c_int) {
         let reply = lowlevel::reply::Reply::<lowlevel::reply::Entry>::new(self.unique, Err(err));
-        self.sender.send_io_slices(&reply.to_io_slices());
+        let _ = self.sender.write_vectored(&reply.to_io_slices());
     }
 }
 
@@ -200,16 +187,16 @@ impl Reply for ReplyAttr {
 
 impl ReplyAttr {
     /// Reply to a request with the given attribute
-    pub fn attr(self, ttl: &Duration, attr: &FileAttr) {
+    pub fn attr(mut self, ttl: &Duration, attr: &FileAttr) {
         let payload = lowlevel::reply::Attr::new(ttl, attr);
         let reply = lowlevel::reply::Reply::new(self.unique, Ok(&payload));
-        self.sender.send_io_slices(&reply.to_io_slices());
+        let _ = self.sender.write_vectored(&reply.to_io_slices());
     }
 
     /// Reply to a request with the given error code
-    pub fn error(self, err: c_int) {
+    pub fn error(mut self, err: c_int) {
         let reply = lowlevel::reply::Reply::<lowlevel::reply::Attr>::new(self.unique, Err(err));
-        self.sender.send_io_slices(&reply.to_io_slices());
+        let _ = self.sender.write_vectored(&reply.to_io_slices());
     }
 }
 
@@ -233,16 +220,16 @@ impl Reply for ReplyXTimes {
 #[cfg(target_os = "macos")]
 impl ReplyXTimes {
     /// Reply to a request with the given xtimes
-    pub fn xtimes(self, bkuptime: SystemTime, crtime: SystemTime) {
+    pub fn xtimes(mut self, bkuptime: SystemTime, crtime: SystemTime) {
         let payload = lowlevel::reply::XTimes::new(&bkuptime, &crtime);
         let reply = lowlevel::reply::Reply::new(self.unique, Ok(&payload));
-        self.sender.send_io_slices(&reply.to_io_slices());
+        let _ = self.sender.write_vectored(&reply.to_io_slices());
     }
 
     /// Reply to a request with the given error code
-    pub fn error(self, err: c_int) {
+    pub fn error(mut self, err: c_int) {
         let reply = lowlevel::reply::Reply::<lowlevel::reply::XTimes>::new(self.unique, Err(err));
-        self.sender.send_io_slices(&reply.to_io_slices());
+        let _ = self.sender.write_vectored(&reply.to_io_slices());
     }
 }
 
@@ -263,16 +250,16 @@ impl Reply for ReplyOpen {
 
 impl ReplyOpen {
     /// Reply to a request with the given open result
-    pub fn opened(self, fh: u64, flags: u32) {
+    pub fn opened(mut self, fh: u64, flags: u32) {
         let payload = lowlevel::reply::Open::new(fh, flags);
         let reply = lowlevel::reply::Reply::new(self.unique, Ok(&payload));
-        self.sender.send_io_slices(&reply.to_io_slices());
+        let _ = self.sender.write_vectored(&reply.to_io_slices());
     }
 
     /// Reply to a request with the given error code
-    pub fn error(self, err: c_int) {
+    pub fn error(mut self, err: c_int) {
         let reply = lowlevel::reply::Reply::<lowlevel::reply::Open>::new(self.unique, Err(err));
-        self.sender.send_io_slices(&reply.to_io_slices());
+        let _ = self.sender.write_vectored(&reply.to_io_slices());
     }
 }
 
@@ -293,16 +280,16 @@ impl Reply for ReplyWrite {
 
 impl ReplyWrite {
     /// Reply to a request with the given open result
-    pub fn written(self, size: u32) {
+    pub fn written(mut self, size: u32) {
         let payload = lowlevel::reply::Write::new(size);
         let reply = lowlevel::reply::Reply::new(self.unique, Ok(&payload));
-        self.sender.send_io_slices(&reply.to_io_slices());
+        let _ = self.sender.write_vectored(&reply.to_io_slices());
     }
 
     /// Reply to a request with the given error code
-    pub fn error(self, err: c_int) {
+    pub fn error(mut self, err: c_int) {
         let reply = lowlevel::reply::Reply::<lowlevel::reply::Write>::new(self.unique, Err(err));
-        self.sender.send_io_slices(&reply.to_io_slices());
+        let _ = self.sender.write_vectored(&reply.to_io_slices());
     }
 }
 
@@ -323,16 +310,16 @@ impl Reply for ReplyStatfs {
 
 impl ReplyStatfs {
     /// Reply to a request with the given open result
-    pub fn statfs(self, blocks: u64, bfree: u64, bavail: u64, files: u64, ffree: u64, bsize: u32, namelen: u32, frsize: u32) {
+    pub fn statfs(mut self, blocks: u64, bfree: u64, bavail: u64, files: u64, ffree: u64, bsize: u32, namelen: u32, frsize: u32) {
         let payload = lowlevel::reply::StatFs::new(blocks, bfree, bavail, files, ffree, bsize, namelen, frsize);
         let reply = lowlevel::reply::Reply::new(self.unique, Ok(&payload));
-        self.sender.send_io_slices(&reply.to_io_slices());
+        let _ = self.sender.write_vectored(&reply.to_io_slices());
     }
 
     /// Reply to a request with the given error code
-    pub fn error(self, err: c_int) {
+    pub fn error(mut self, err: c_int) {
         let reply = lowlevel::reply::Reply::<lowlevel::reply::StatFs>::new(self.unique, Err(err));
-        self.sender.send_io_slices(&reply.to_io_slices());
+        let _ = self.sender.write_vectored(&reply.to_io_slices());
     }
 }
 
@@ -353,16 +340,16 @@ impl Reply for ReplyCreate {
 
 impl ReplyCreate {
     /// Reply to a request with the given entry
-    pub fn created(self, ttl: &Duration, attr: &FileAttr, generation: u64, fh: u64, flags: u32) {
+    pub fn created(mut self, ttl: &Duration, attr: &FileAttr, generation: u64, fh: u64, flags: u32) {
         let payload = lowlevel::reply::Create::new(ttl, attr, generation, fh, flags);
         let reply = lowlevel::reply::Reply::new(self.unique, Ok(&payload));
-        self.sender.send_io_slices(&reply.to_io_slices());
+        let _ = self.sender.write_vectored(&reply.to_io_slices());
     }
 
     /// Reply to a request with the given error code
-    pub fn error(self, err: c_int) {
+    pub fn error(mut self, err: c_int) {
         let reply = lowlevel::reply::Reply::<lowlevel::reply::Create>::new(self.unique, Err(err));
-        self.sender.send_io_slices(&reply.to_io_slices());
+        let _ = self.sender.write_vectored(&reply.to_io_slices());
     }
 }
 
@@ -383,16 +370,16 @@ impl Reply for ReplyLock {
 
 impl ReplyLock {
     /// Reply to a request with the given open result
-    pub fn locked(self, start: u64, end: u64, typ: u32, pid: u32) {
+    pub fn locked(mut self, start: u64, end: u64, typ: u32, pid: u32) {
         let payload = lowlevel::reply::Lock::new(start, end, typ, pid);
         let reply = lowlevel::reply::Reply::new(self.unique, Ok(&payload));
-        self.sender.send_io_slices(&reply.to_io_slices());
+        let _ = self.sender.write_vectored(&reply.to_io_slices());
     }
 
     /// Reply to a request with the given error code
-    pub fn error(self, err: c_int) {
+    pub fn error(mut self, err: c_int) {
         let reply = lowlevel::reply::Reply::<lowlevel::reply::Lock>::new(self.unique, Err(err));
-        self.sender.send_io_slices(&reply.to_io_slices());
+        let _ = self.sender.write_vectored(&reply.to_io_slices());
     }
 }
 
@@ -413,16 +400,16 @@ impl Reply for ReplyBmap {
 
 impl ReplyBmap {
     /// Reply to a request with the given open result
-    pub fn bmap(self, block: u64) {
+    pub fn bmap(mut self, block: u64) {
         let payload = lowlevel::reply::Bmap::new(block);
         let reply = lowlevel::reply::Reply::new(self.unique, Ok(&payload));
-        self.sender.send_io_slices(&reply.to_io_slices());
+        let _ = self.sender.write_vectored(&reply.to_io_slices());
     }
 
     /// Reply to a request with the given error code
-    pub fn error(self, err: c_int) {
+    pub fn error(mut self, err: c_int) {
         let reply = lowlevel::reply::Reply::<lowlevel::reply::Bmap>::new(self.unique, Err(err));
-        self.sender.send_io_slices(&reply.to_io_slices());
+        let _ = self.sender.write_vectored(&reply.to_io_slices());
     }
 }
 
@@ -469,16 +456,16 @@ impl ReplyDirectory {
     }
 
     /// Reply to a request with the filled directory buffer
-    pub fn ok(self) {
+    pub fn ok(mut self) {
         let payload = lowlevel::reply::Data::from(self.data);
         let reply = lowlevel::reply::Reply::new(self.unique, Ok(&payload));
-        self.sender.send_io_slices(&reply.to_io_slices());
+        let _ = self.sender.write_vectored(&reply.to_io_slices());
     }
 
     /// Reply to a request with the given error code
-    pub fn error(self, err: c_int) {
+    pub fn error(mut self, err: c_int) {
         let reply = lowlevel::reply::Reply::<lowlevel::reply::Data<'_>>::new(self.unique, Err(err));
-        self.sender.send_io_slices(&reply.to_io_slices());
+        let _ = self.sender.write_vectored(&reply.to_io_slices());
     }
 }
 
@@ -499,33 +486,32 @@ impl Reply for ReplyXattr {
 
 impl ReplyXattr {
     /// Reply to a request with the size of the xattr.
-    pub fn size(self, size: u32) {
+    pub fn size(mut self, size: u32) {
         let payload = lowlevel::reply::XAttrSize::new(size);
         let reply = lowlevel::reply::Reply::new(self.unique, Ok(&payload));
-        self.sender.send_io_slices(&reply.to_io_slices());
+        let _ = self.sender.write_vectored(&reply.to_io_slices());
     }
 
     /// Reply to a request with the data in the xattr.
-    pub fn data(self, data: &[u8]) {
+    pub fn data(mut self, data: &[u8]) {
         let payload = lowlevel::reply::Data::from(data);
         let reply = lowlevel::reply::Reply::new(self.unique, Ok(&payload));
-        self.sender.send_io_slices(&reply.to_io_slices());
+        let _ = self.sender.write_vectored(&reply.to_io_slices());
     }
 
     /// Reply to a request with the given error code.
-    pub fn error(self, err: c_int) {
+    pub fn error(mut self, err: c_int) {
         let reply = lowlevel::reply::Reply::<lowlevel::reply::XAttrSize>::new(self.unique, Err(err));
-        self.sender.send_io_slices(&reply.to_io_slices());
+        let _ = self.sender.write_vectored(&reply.to_io_slices());
     }
 }
 
 #[cfg(test)]
 mod test {
-    use std::{mem, slice, thread};
-    use std::sync::mpsc::{channel, Sender};
-    use super::{Reply, ReplyEmpty};
-    use super::ReplyDirectory;
+    use std::{mem, io, slice, thread};
+    use std::sync::mpsc;
     use crate::FileType;
+    use super::*;
 
     /// Serialize an arbitrary type to bytes (memory copy, useful for fuse_*_out types)
     fn as_bytes<T, U, F: FnOnce(&[&[u8]]) -> U>(data: &T, f: F) -> U {
@@ -579,13 +565,24 @@ mod test {
     }
 
 
+    #[derive(Debug)]
     struct AssertSender {
-        expected: Vec<Vec<u8>>,
+        expected: Vec<u8>,
     }
 
-    impl super::ReplySender for AssertSender {
-        fn send(&self, data: &[&[u8]]) {
+    impl Write for AssertSender {
+        fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
+            panic!("ReplySender::write is not supposed to be called");
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            panic!("ReplySender::flush is not supposed to be called");
+        }
+
+        fn write_vectored(&mut self, bufs: &[io::IoSlice<'_>]) -> io::Result<usize> {
+            let data: Vec<u8> = bufs.iter().map(|buf| buf.iter()).flatten().copied().collect();
             assert_eq!(self.expected, data);
+            Ok(data.len())
         }
     }
 
@@ -594,8 +591,7 @@ mod test {
     fn reply_empty() {
         let sender = AssertSender {
             expected: vec![
-                vec![0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  0xef, 0xbe, 0xad, 0xde, 0x00, 0x00, 0x00, 0x00],
-                vec![],
+                0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  0xef, 0xbe, 0xad, 0xde, 0x00, 0x00, 0x00, 0x00,
             ]
         };
         let reply: ReplyEmpty = Reply::new(0xdeadbeef, sender);
@@ -607,11 +603,11 @@ mod test {
     fn reply_directory() {
         let sender = AssertSender {
             expected: vec![
-                vec![0x50, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  0xef, 0xbe, 0xad, 0xde, 0x00, 0x00, 0x00, 0x00],
-                vec![0xbb, 0xaa, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                     0x05, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00,  0x68, 0x65, 0x6c, 0x6c, 0x6f, 0x00 ,0x00, 0x00,
-                     0xdd, 0xcc, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                     0x08, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,  0x77, 0x6f, 0x72, 0x6c, 0x64, 0x2e, 0x72, 0x73],
+                0x50, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  0xef, 0xbe, 0xad, 0xde, 0x00, 0x00, 0x00, 0x00,
+                0xbb, 0xaa, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x05, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00,  0x68, 0x65, 0x6c, 0x6c, 0x6f, 0x00 ,0x00, 0x00,
+                0xdd, 0xcc, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x08, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,  0x77, 0x6f, 0x72, 0x6c, 0x64, 0x2e, 0x72, 0x73,
             ]
         };
         let mut reply = ReplyDirectory::new(0xdeadbeef, sender, 4096);
@@ -620,16 +616,29 @@ mod test {
         reply.ok();
     }
 
-    impl super::ReplySender for Sender<()> {
-        fn send(&self, _: &[&[u8]]) {
-            Sender::send(self, ()).unwrap()
+
+    #[derive(Debug)]
+    struct AsyncSender(mpsc::Sender<()>);
+
+    impl Write for AsyncSender {
+        fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
+            panic!("ReplySender::write is not supposed to be called");
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            panic!("ReplySender::flush is not supposed to be called");
+        }
+
+        fn write_vectored(&mut self, _bufs: &[io::IoSlice<'_>]) -> io::Result<usize> {
+            self.0.send(()).unwrap();
+            Ok(0)
         }
     }
 
     #[test]
     fn async_reply() {
-        let (tx, rx) = channel::<()>();
-        let reply: ReplyEmpty = Reply::new(0xdeadbeef, tx);
+        let (tx, rx) = mpsc::channel();
+        let reply: ReplyEmpty = Reply::new(0xdeadbeef, AsyncSender(tx));
         thread::spawn(move || {
             reply.ok();
         });
