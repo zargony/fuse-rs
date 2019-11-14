@@ -7,6 +7,9 @@ mod argument;
 mod attr;
 pub use attr::{FileAttr, FileAttrTryFromError, FileType, FileTypeTryFromError};
 
+mod channel;
+pub(crate) use channel::{Channel, unmount};
+
 mod filesystem;
 pub use filesystem::{Filesystem, Result};
 
