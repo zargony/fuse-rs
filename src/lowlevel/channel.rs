@@ -102,7 +102,7 @@ impl Channel {
     /// Create a new communication channel to the kernel driver using the given file descriptor
     /// obtained by calling fusermount or any other FUSE mount mechanism. When the channel is
     /// dropped, the file descriptor will be closed and the path unmounted.
-    pub fn new(fd: RawFd, mountpoint: PathBuf) -> Self {
+    pub unsafe fn new(fd: RawFd, mountpoint: PathBuf) -> Self {
         Self { fd, mountpoint }
     }
 
@@ -126,8 +126,10 @@ impl Channel {
         };
 
         let path = CString::new(mountpoint.as_os_str().as_bytes())?;
-        let fd = try_io!(unsafe { fuse_mount_compat25(path.as_ptr(), &fuse_args) });
-        Ok(Channel::new(fd, mountpoint))
+        unsafe {
+            let fd = try_io!(fuse_mount_compat25(path.as_ptr(), &fuse_args));
+            Ok(Channel::new(fd, mountpoint))
+        }
     }
 
     /// Returns the path of the mounted filesystem.
@@ -146,7 +148,7 @@ impl Channel {
 }
 
 
-/// Unmount an arbitrary mount point
+/// Unmount an arbitrary mountpoint
 // FIXME: This should be moved to `Channel::unmount`, but it's still needed for `BackgroundSession`
 pub fn unmount(mountpoint: &Path) -> io::Result<()> {
     // `fuse_unmount_compat22` unfortunately doesn't return a status. Additionally, it attempts
