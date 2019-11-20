@@ -1,0 +1,44 @@
+name: CI
+on: [push, pull_request]
+
+jobs:
+  test:
+    name: Test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+        rust:
+          - 1.39.0
+          - stable
+          - beta
+          - nightly
+    steps:
+      - name: Install FUSE (Linux)
+        if: startsWith(matrix.os, 'ubuntu')
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libfuse-dev pkg-config
+      - name: Install FUSE (macOS)
+        if: startsWith(matrix.os, 'macos')
+        run: brew update && brew install pkg-config && brew tap homebrew/cask && brew cask install osxfuse
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: ${{ matrix.rust }}
+          override: true
+          profile: minimal
+      - name: Display version information
+        run: rustup --version; cargo --version; rustc --version
+      - name: Check out repository
+        uses: actions/checkout@v1
+      - name: Build everything
+        continue-on-error: ${{ matrix.rust == 'nightly' }}
+        run: cargo build --all --all-targets
+      - name: Build documentation
+        continue-on-error: ${{ matrix.rust == 'nightly' }}
+        run: cargo doc --no-deps
+      - name: Run all unit tests
+        continue-on-error: ${{ matrix.rust == 'nightly' }}
+        run: cargo test --all

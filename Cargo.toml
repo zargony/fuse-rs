@@ -16,7 +16,8 @@ license = "MIT"
 members = [".", "fuse-abi", "fuse-sys"]
 
 [badges]
-travis-ci = { repository = "zargony/fuse-rs" }
+cirrus-ci = { repository = "zargony/fuse-rs" }
+github = { repository = "zargony/fuse-rs" }
 
 [dependencies]
 fuse-abi = { path = "./fuse-abi", version = "=0.4.0-dev" }
