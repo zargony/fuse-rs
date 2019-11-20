@@ -2,7 +2,6 @@
 
 ![Crates.io](https://img.shields.io/crates/l/fuse)
 [![Crates.io](https://img.shields.io/crates/v/fuse)](https://crates.io/crates/fuse)
-[![Build Status](https://travis-ci.com/zargony/fuse-rs.svg?branch=master)](https://travis-ci.com/zargony/fuse-rs)
 
 ## About
 
@@ -105,7 +104,7 @@ Fork, hack, submit pull request. Make sure to make it useful for the target audi
 
 [issues]: https://github.com/zargony/fuse-rs/issues
 [documentation]: https://docs.rs/fuse
-[CI]: https://travis-ci.com/zargony/fuse-rs
+[CI]: https://github.com/zargony/fuse-rs/actions
 
 [Rust]: https://rust-lang.org
 [Homebrew]: https://brew.sh
