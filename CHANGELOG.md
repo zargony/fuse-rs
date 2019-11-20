@@ -3,6 +3,7 @@
 ## 0.4.0 - UNRELEASED
 
 * Split into `fuse`, `fuse-abi` and `fuse-sys` crate
+* GitHub repository renamed to `fuse-rs` (previously `rust-fuse`)
 
 ## 0.3.1 - 2017-11-08
 

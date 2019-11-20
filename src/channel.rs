@@ -15,7 +15,7 @@ use crate::reply::ReplySender;
 /// Helper function to provide options as a fuse_args struct
 /// (which contains an argc count and an argv pointer)
 fn with_fuse_args<T, F: FnOnce(&fuse_args) -> T>(options: &[&OsStr], f: F) -> T {
-    let mut args = vec![CString::new("rust-fuse").unwrap()];
+    let mut args = vec![CString::new("fuse-rs").unwrap()];
     args.extend(options.iter().map(|s| CString::new(s.as_bytes()).unwrap()));
     let argptrs: Vec<_> = args.iter().map(|s| s.as_ptr()).collect();
     f(&fuse_args { argc: argptrs.len() as i32, argv: argptrs.as_ptr(), allocated: 0 })
@@ -166,7 +166,7 @@ mod test {
     fn fuse_args() {
         with_fuse_args(&[OsStr::new("foo"), OsStr::new("bar")], |args| {
             assert_eq!(args.argc, 3);
-            assert_eq!(unsafe { CStr::from_ptr(*args.argv.offset(0)).to_bytes() }, b"rust-fuse");
+            assert_eq!(unsafe { CStr::from_ptr(*args.argv.offset(0)).to_bytes() }, b"fuse-rs");
             assert_eq!(unsafe { CStr::from_ptr(*args.argv.offset(1)).to_bytes() }, b"foo");
             assert_eq!(unsafe { CStr::from_ptr(*args.argv.offset(2)).to_bytes() }, b"bar");
         });

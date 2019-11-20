@@ -5,8 +5,8 @@ version = "0.4.0-dev"
 authors = ["Andreas Neuhaus <zargony@zargony.com>"]
 description = "Rust library for filesystems in userspace (FUSE)"
 documentation = "https://docs.rs/fuse"
-homepage = "https://github.com/zargony/rust-fuse"
-repository = "https://github.com/zargony/rust-fuse"
+homepage = "https://github.com/zargony/fuse-rs"
+repository = "https://github.com/zargony/fuse-rs"
 readme = "README.md"
 keywords = ["fuse", "filesystem", "system", "bindings"]
 categories = ["api-bindings", "filesystem"]
@@ -16,7 +16,7 @@ license = "MIT"
 members = [".", "fuse-abi", "fuse-sys"]
 
 [badges]
-travis-ci = { repository = "zargony/rust-fuse" }
+travis-ci = { repository = "zargony/fuse-rs" }
 
 [dependencies]
 fuse-abi = { path = "./fuse-abi", version = "=0.4.0-dev" }
