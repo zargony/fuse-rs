@@ -16,7 +16,7 @@ use log::{debug, error, warn};
 use crate::channel::ChannelSender;
 use crate::ll;
 use crate::reply::{Reply, ReplyRaw, ReplyEmpty, ReplyDirectory};
-use crate::session::{MAX_WRITE_SIZE, Session};
+use crate::session::Session;
 use crate::Filesystem;
 
 /// We generally support async reads
@@ -39,11 +39,13 @@ pub struct Request<'a> {
     data: &'a [u8],
     /// Parsed request
     request: ll::Request<'a>,
+    /// Requested buffer size for setting max_write
+    requested_buffer_size: usize,
 }
 
 impl<'a> Request<'a> {
     /// Create a new request from the given data
-    pub fn new(ch: ChannelSender, data: &'a [u8]) -> Option<Request<'a>> {
+    pub fn new(ch: ChannelSender, data: &'a [u8], requested_buffer_size: usize) -> Option<Request<'a>> {
         let request = match ll::Request::try_from(data) {
             Ok(request) => request,
             Err(err) => {
@@ -53,7 +55,7 @@ impl<'a> Request<'a> {
             }
         };
 
-        Some(Self { ch, data, request})
+        Some(Self { ch, data, request, requested_buffer_size})
     }
 
     /// Dispatch request to the given filesystem.
@@ -90,7 +92,7 @@ impl<'a> Request<'a> {
                     max_readahead: arg.max_readahead,       // accept any readahead size
                     flags: arg.flags & INIT_FLAGS,          // use features given in INIT_FLAGS and reported as capable
                     unused: 0,
-                    max_write: MAX_WRITE_SIZE as u32,       // use a max write size that fits into the session's buffer
+                    max_write: self.requested_buffer_size as u32,       // use a max write size that fits into the session's buffer
                 };
                 debug!("INIT response: ABI {}.{}, flags {:#x}, max readahead {}, max write {}", init.major, init.minor, init.flags, init.max_readahead, init.max_write);
                 se.initialized = true;

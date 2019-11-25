@@ -367,8 +367,8 @@ pub trait Filesystem {
 ///
 /// Note that you need to lead each option with a separate `"-o"` string. See
 /// `examples/hello.rs`.
-pub fn mount<FS: Filesystem, P: AsRef<Path>>(filesystem: FS, mountpoint: P, options: &[&OsStr]) -> io::Result<()>{
-    Session::new(filesystem, mountpoint.as_ref(), options).and_then(|mut se| se.run())
+pub fn mount<FS: Filesystem, P: AsRef<Path>>(filesystem: FS, mountpoint: P, options: &[&OsStr], requested_write_size: Option<usize>) -> io::Result<()>{
+    Session::new(filesystem, mountpoint.as_ref(), options, requested_write_size).and_then(|mut se| se.run())
 }
 
 /// Mount the given filesystem to the given mountpoint. This function spawns
@@ -376,6 +376,6 @@ pub fn mount<FS: Filesystem, P: AsRef<Path>>(filesystem: FS, mountpoint: P, opti
 /// and therefore returns immediately. The returned handle should be stored
 /// to reference the mounted filesystem. If it's dropped, the filesystem will
 /// be unmounted.
-pub unsafe fn spawn_mount<'a, FS: Filesystem+Send+'a, P: AsRef<Path>>(filesystem: FS, mountpoint: P, options: &[&OsStr]) -> io::Result<BackgroundSession<'a>> {
-    Session::new(filesystem, mountpoint.as_ref(), options).and_then(|se| se.spawn())
+pub unsafe fn spawn_mount<'a, FS: Filesystem+Send+'a, P: AsRef<Path>>(filesystem: FS, mountpoint: P, options: &[&OsStr], requested_write_size: Option<usize>) -> io::Result<BackgroundSession<'a>> {
+    Session::new(filesystem, mountpoint.as_ref(), options, requested_write_size).and_then(|se| se.spawn())
 }
