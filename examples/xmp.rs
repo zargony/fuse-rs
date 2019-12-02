@@ -7,13 +7,15 @@
 use std::env;
 use std::ffi::{OsStr,OsString};
 use std::time::{Duration, UNIX_EPOCH};
-use libc::{ENOENT,EPERM,EIO, ENOSYS};
+use libc::{ENOENT,EPERM,EIO, ENOSYS, EINVAL};
+use libc::{O_ACCMODE, O_RDONLY, O_WRONLY, O_RDWR, O_APPEND, O_CREAT, O_EXCL, O_TRUNC};
+use libc::c_int;
 use fuse::{FileType, FileAttr, Filesystem, Request, ReplyData,
- ReplyEntry, ReplyAttr, ReplyDirectory, ReplyOpen, ReplyEmpty};
+ ReplyEntry, ReplyAttr, ReplyDirectory, ReplyOpen, ReplyEmpty, ReplyCreate, ReplyWrite};
 
 use std::collections::HashMap;
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::{MetadataExt,PermissionsExt,FileTypeExt};
+use std::os::unix::fs::{MetadataExt,PermissionsExt,FileTypeExt,OpenOptionsExt};
 use std::path::Path;
 use std::io::ErrorKind;
 
@@ -73,6 +75,7 @@ struct XmpFS {
     path_to_inode: HashMap<OsString, u64>,
 
     opened_directories: HashMap<u64, Vec<DirInfo>>,
+    opened_files: HashMap<u64, std::fs::File>,
 }
 
 impl XmpFS {
@@ -82,11 +85,13 @@ impl XmpFS {
             inode_to_path: HashMap::with_capacity(1024),
             path_to_inode: HashMap::with_capacity(1024),
             opened_directories: HashMap::with_capacity(2),
+            opened_files: HashMap::with_capacity(2),
         }
     }
 
     pub fn populate_root_dir(&mut self) {
-        let _ = self.add_inode(OsStr::from_bytes(b"/"));
+        let rootino = self.add_inode(OsStr::from_bytes(b"/"));
+        assert_eq!(rootino, 1);
     }
 
     pub fn add_inode(&mut self, path: &OsStr) -> u64 {
@@ -107,6 +112,12 @@ impl XmpFS {
     pub fn get_inode (&self, path: impl AsRef<Path>) -> Option<u64> {
         self.path_to_inode.get(path.as_ref().as_os_str()).map(|x|*x)
     }
+
+    pub fn unregister_ino(&mut self, ino:u64) {
+        if ! self.inode_to_path.contains_key(&ino) { return }
+        self.path_to_inode.remove(&self.inode_to_path[&ino]);
+        self.inode_to_path.remove(&ino);
+    }
 }
 
 fn ft2ft(t : std::fs::FileType) -> FileType {
@@ -123,13 +134,14 @@ fn ft2ft(t : std::fs::FileType) -> FileType {
 }
 
 fn meta2attr(m : &std::fs::Metadata, ino: u64) -> FileAttr {
+    use std::convert::TryInto;
     FileAttr {
         ino,
         size: m.size(),
         blocks: m.blocks(),
         atime: m.accessed().unwrap_or(UNIX_EPOCH),
         mtime: m.modified().unwrap_or(UNIX_EPOCH),
-        ctime: m.created().unwrap_or(UNIX_EPOCH),
+        ctime:  UNIX_EPOCH + Duration::from_secs(m.ctime().try_into().unwrap_or(0)),
         crtime: m.created().unwrap_or(UNIX_EPOCH),
         kind: ft2ft(m.file_type()),
         perm: m.permissions().mode() as u16,
@@ -171,10 +183,7 @@ impl Filesystem for XmpFS {
                 reply.error(errhandle(e, || {
                     // if not found:
                     if let Some(ino) = entry_inode {
-                        let parent_path = Path::new(&self.inode_to_path[&parent]);
-                        let entry_path = parent_path.join(name);
-                        self.path_to_inode.remove(entry_path.as_os_str());
-                        self.inode_to_path.remove(&ino);
+                        self.unregister_ino(ino);
                     }
                 }));
             },
@@ -206,8 +215,7 @@ impl Filesystem for XmpFS {
             Err(e) => {
                 reply.error(errhandle(e, || {
                     // if not found:
-                    self.path_to_inode.remove(&self.inode_to_path[&ino]);
-                    self.inode_to_path.remove(&ino);
+                    self.unregister_ino(ino);
                 }));
             },
             Ok(m) => {
@@ -217,8 +225,165 @@ impl Filesystem for XmpFS {
         }
     }
 
-    fn read(&mut self, _req: &Request, ino: u64, _fh: u64, offset: i64, _size: u32, reply: ReplyData) {
-        reply.error(ENOSYS);
+    fn open(&mut self, _req: &Request, ino: u64, flags: u32, reply: ReplyOpen) {
+        if ! self.inode_to_path.contains_key(&ino) {
+            return reply.error(ENOENT);
+        }
+
+        let entry_path = Path::new(&self.inode_to_path[&ino]);
+
+        let mut oo = std::fs::OpenOptions::new();
+
+        let fl = flags as c_int;
+        match fl & O_ACCMODE {
+            O_RDONLY => { oo.read(true); oo.write(false); },
+            O_WRONLY => { oo.read(false); oo.write(true); },
+            O_RDWR => { oo.read(true); oo.write(true); },
+            _ => return reply.error(EINVAL),
+        }
+
+        oo.create(false);
+        if fl & (O_EXCL | O_CREAT) != 0 {
+            error!("Wrong flags on open");
+            return reply.error(EIO);
+        }
+
+        oo.append(fl & O_APPEND  == O_APPEND);
+        oo.truncate(fl & O_TRUNC == O_TRUNC);
+
+        match oo.open(entry_path) {
+            Err(e) => reply.error(errhandle(e, ||self.unregister_ino(ino))),
+            Ok(f) => {
+                let fh = self.counter;
+                self.counter+=1;
+
+                self.opened_files.insert(fh, f);
+                reply.opened(fh, 0);
+            },
+        }
+        
+    }
+
+    fn create(&mut self, _req: &Request, parent: u64, name: &OsStr, mode: u32, flags: u32, reply: ReplyCreate) {
+        
+        if ! self.inode_to_path.contains_key(&parent) {
+            return reply.error(ENOENT);
+        }
+
+        let parent_path = Path::new(&self.inode_to_path[&parent]);
+        let entry_path = parent_path.join(name);
+
+        let ino = self.add_or_create_inode(&entry_path);
+
+        let mut oo = std::fs::OpenOptions::new();
+
+        let fl = flags as c_int;
+        match fl & O_ACCMODE {
+            O_RDONLY => { oo.read(true); oo.write(false); },
+            O_WRONLY => { oo.read(false); oo.write(true); },
+            O_RDWR => { oo.read(true); oo.write(true); },
+            _ => return reply.error(EINVAL),
+        }
+
+        oo.create(fl & O_CREAT == O_CREAT);
+        oo.create_new(fl & O_EXCL == O_EXCL);
+        oo.append(fl & O_APPEND  == O_APPEND);
+        oo.truncate(fl & O_TRUNC == O_TRUNC);
+        oo.mode(mode);
+
+        match oo.open(&entry_path) {
+            Err(e) => return reply.error(errhandle(e, ||self.unregister_ino(ino))),
+            Ok(f) => {
+                let meta = match std::fs::symlink_metadata(entry_path) {
+                    Err(e) => {
+                        return reply.error(errhandle(e, ||self.unregister_ino(ino)));
+                    },
+                    Ok(m) => meta2attr(&m, ino),
+                };
+                let fh = self.counter;
+                self.counter+=1;
+
+                self.opened_files.insert(fh, f);
+                reply.created(&TTL, &meta, 1, fh, 0);
+            },
+        }
+        
+    }
+
+
+    fn read(&mut self, _req: &Request, _ino: u64, fh: u64, offset: i64, size: u32, reply: ReplyData) {
+        if ! self.opened_files.contains_key(&fh) {
+            return reply.error(EIO);
+        }
+        let size = size as usize;
+
+        let f = self.opened_files.get_mut(&fh).unwrap();
+
+        let mut b = Vec::with_capacity(size);
+        b.resize(size, 0);
+
+        use std::io::{Seek, Read, SeekFrom};
+        use std::os::unix::fs::FileExt;
+
+        let mut bo = 0;
+        while bo < size {
+            match f.read_at(&mut b[bo..], offset as u64)  {
+                Err(e) => return reply.error(errhandle(e, ||())),
+                Ok(0) => {
+                    b.resize(bo, 0);
+                    break;
+                }
+                Ok(ret) => {
+                    bo += ret;
+                }
+            };
+        }
+        
+        reply.data(&b[..]);
+    }
+
+    fn write(
+        &mut self, 
+        _req: &Request, 
+        _ino: u64, 
+        fh: u64, 
+        offset: i64, 
+        data: &[u8], 
+        _flags: u32, 
+        reply: ReplyWrite
+    ) {
+        if ! self.opened_files.contains_key(&fh) {
+            return reply.error(EIO);
+        }
+
+        let f = self.opened_files.get_mut(&fh).unwrap();
+        
+        use std::os::unix::fs::FileExt;
+
+        match f.write_all_at(data, offset as u64)  {
+            Err(e) => return reply.error(errhandle(e, ||())),
+            Ok(()) => {
+                reply.written(data.len() as u32);
+            }
+        };
+    }
+
+    fn release(
+        &mut self, 
+        _req: &Request, 
+        _ino: u64, 
+        fh: u64, 
+        _flags: u32, 
+        _lock_owner: u64, 
+        _flush: bool, 
+        reply: ReplyEmpty
+    ) {
+        if ! self.opened_files.contains_key(&fh) {
+            return reply.error(EIO);
+        }
+
+        self.opened_files.remove(&fh);
+        reply.ok();
     }
 
     fn opendir(&mut self, _req: &Request, ino: u64, _flags: u32, reply: ReplyOpen) {
