@@ -1,8 +1,8 @@
 //! Analogue of fusexmp
+//! 
+//! See also a more high-level example: https://github.com/wfraser/fuse-mt/tree/master/example
 
 #![allow(unused)]
-
-
 
 use std::env;
 use std::ffi::{OsStr,OsString};
@@ -17,6 +17,7 @@ use std::collections::HashMap;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{MetadataExt,PermissionsExt,FileTypeExt,OpenOptionsExt};
 use std::path::Path;
+use std::time::SystemTime;
 use std::io::ErrorKind;
 
 use log::{warn,error};
@@ -368,6 +369,40 @@ impl Filesystem for XmpFS {
         };
     }
 
+    fn fsync(
+        &mut self, 
+        _req: &Request, 
+        _ino: u64, 
+        fh: u64, 
+        datasync: bool, 
+        reply: ReplyEmpty
+    )  {
+        if ! self.opened_files.contains_key(&fh) {
+            return reply.error(EIO);
+        }
+
+        let f = self.opened_files.get_mut(&fh).unwrap();
+
+        match (if datasync { f.sync_data() } else { f.sync_all() }) {
+            Err(e) => return reply.error(errhandle(e, ||())),
+            Ok(()) => {
+                reply.ok();
+            }
+        }
+    }
+
+    fn fsyncdir(
+        &mut self, 
+        _req: &Request, 
+        _ino: u64, 
+        _fh: u64, 
+        _datasync: bool, 
+        reply: ReplyEmpty
+    ) {
+        // I'm not sure how to do I with libstd
+        reply.ok();
+    }
+
     fn release(
         &mut self, 
         _req: &Request, 
@@ -557,6 +592,202 @@ impl Filesystem for XmpFS {
                 reply.ok();
             }
         }
+    }
+
+    fn symlink(
+        &mut self, 
+        _req: &Request, 
+        parent: u64, 
+        name: &OsStr, 
+        link: &Path, 
+        reply: ReplyEntry
+    ){
+        if ! self.inode_to_path.contains_key(&parent) {
+            return reply.error(ENOENT);
+        }
+
+        let parent_path = Path::new(&self.inode_to_path[&parent]);
+        let entry_path = parent_path.join(name);
+        let ino = self.add_or_create_inode(&entry_path);
+
+        match std::os::unix::fs::symlink(&entry_path, link) {
+            Err(e) => reply.error(errhandle(e, ||self.unregister_ino(ino))),
+            Ok(()) => { 
+                let attr = match std::fs::symlink_metadata(entry_path) {
+                    Err(e) => {
+                        return reply.error(errhandle(e, ||self.unregister_ino(ino)));
+                    },
+                    Ok(m) => meta2attr(&m, ino),
+                };
+                
+                reply.entry(&TTL, &attr, 1);
+            }
+        }
+    }
+
+    fn rename(
+        &mut self, 
+        _req: &Request, 
+        parent: u64, 
+        name: &OsStr, 
+        newparent: u64, 
+        newname: &OsStr, 
+        reply: ReplyEmpty
+    ){
+        if ! self.inode_to_path.contains_key(&parent) {
+            return reply.error(ENOENT);
+        }
+        if ! self.inode_to_path.contains_key(&newparent) {
+            return reply.error(ENOENT);
+        }
+
+        let parent_path = Path::new(&self.inode_to_path[&parent]);
+        let newparent_path = Path::new(&self.inode_to_path[&newparent]);
+        let entry_path = parent_path.join(name);
+        let newentry_path = newparent_path.join(newname);
+
+        if (entry_path == newentry_path) {
+            return reply.ok();
+        }
+
+        let ino = self.add_or_create_inode(&entry_path);
+
+        match std::fs::rename(&entry_path, &newentry_path) {
+            Err(e) => reply.error(errhandle(e, ||self.unregister_ino(ino))),
+            Ok(()) => {
+                self.inode_to_path.insert(ino, newentry_path.as_os_str().to_os_string());
+                self.path_to_inode.remove(entry_path.as_os_str());
+                self.path_to_inode.insert(newentry_path.as_os_str().to_os_string(), ino);
+                reply.ok();
+            }
+        }
+    }
+
+    fn link(
+        &mut self, 
+        _req: &Request, 
+        ino: u64, 
+        newparent: u64, 
+        newname: &OsStr, 
+        reply: ReplyEntry
+    ) {
+        // Not a true hardlink: new inode
+
+        if ! self.inode_to_path.contains_key(&ino) {
+            return reply.error(ENOENT);
+        }
+        if ! self.inode_to_path.contains_key(&newparent) {
+            return reply.error(ENOENT);
+        }
+
+        let entry_path = Path::new(&self.inode_to_path[&ino]).to_owned();
+        let newparent_path = Path::new(&self.inode_to_path[&newparent]);
+        let newentry_path = newparent_path.join(newname);
+
+        let newino = self.add_or_create_inode(&newentry_path);
+
+        match std::fs::hard_link(&entry_path, &newentry_path) {
+            Err(e) => reply.error(errhandle(e, ||self.unregister_ino(ino))),
+            Ok(()) => {
+                let attr = match std::fs::symlink_metadata(newentry_path) {
+                    Err(e) => {
+                        return reply.error(errhandle(e, ||self.unregister_ino(newino)));
+                    },
+                    Ok(m) => meta2attr(&m, newino),
+                };
+                
+                reply.entry(&TTL, &attr, 1);
+            }
+        }
+    }
+    fn mknod(
+        &mut self, 
+        _req: &Request, 
+        _parent: u64, 
+        _name: &OsStr, 
+        _mode: u32, 
+        _rdev: u32, 
+        reply: ReplyEntry
+    ) {
+       // no mknod lib libstd
+       reply.error(ENOSYS);
+    }
+
+    fn setattr(&mut self, _req: &Request<'_>, ino: u64, mode: Option<u32>, _uid: Option<u32>, _gid: Option<u32>, size: Option<u64>, _atime: Option<SystemTime>, _mtime: Option<SystemTime>, fh: Option<u64>, _crtime: Option<SystemTime>, _chgtime: Option<SystemTime>, _bkuptime: Option<SystemTime>, _flags: Option<u32>, reply: ReplyAttr) {
+        // Limited to setting file length only
+
+        let (fh,sz) = match (fh,size) {
+            (Some(x), Some(y)) => (x,y),
+            _ => {
+                // only partial for chmod +x, and not the good one
+                
+                let entry_path = Path::new(&self.inode_to_path[&ino]).to_owned();
+
+                if let Some(mode) = mode {
+                    use std::fs::Permissions;
+                    use std::os::unix::fs::PermissionsExt;
+
+                    let perm = Permissions::from_mode(mode);
+                    match std::fs::set_permissions(&entry_path, perm) {
+                        Err(e) => return reply.error(errhandle(e, ||self.unregister_ino(ino))),
+                        Ok(()) => {
+                            let attr = match std::fs::symlink_metadata(entry_path) {
+                                Err(e) => {
+                                    return reply.error(errhandle(e, ||self.unregister_ino(ino)));
+                                },
+                                Ok(m) => meta2attr(&m, ino),
+                            };
+                            
+                            return reply.attr(&TTL, &attr);
+                        },
+                    }
+                } else {
+                    // Just try to do nothing, successfully.
+                    let attr = match std::fs::symlink_metadata(entry_path) {
+                        Err(e) => {
+                            return reply.error(errhandle(e, ||self.unregister_ino(ino)));
+                        },
+                        Ok(m) => meta2attr(&m, ino),
+                    };
+                    
+                    return reply.attr(&TTL, &attr);
+                }
+           
+            },
+        };
+
+        if ! self.opened_files.contains_key(&fh) {
+            return reply.error(EIO);
+        }
+
+        let f = self.opened_files.get_mut(&fh).unwrap();
+
+        match f.set_len(sz) {
+            Err(e) => reply.error(errhandle(e, ||())),
+            Ok(()) => {
+                // pull regular file metadata out of thin air
+
+                let attr = FileAttr {
+                    ino,
+                    size: sz,
+                    blocks: 1,
+                    atime: UNIX_EPOCH,
+                    mtime: UNIX_EPOCH,
+                    ctime: UNIX_EPOCH,
+                    crtime: UNIX_EPOCH,
+                    kind: FileType::RegularFile,
+                    perm: 0o644,
+                    nlink: 1,
+                    uid: 0,
+                    gid: 0,
+                    rdev: 0,
+                    flags: 0,
+                };
+                
+                reply.attr(&TTL, &attr);
+            }
+        }
+        
     }
 }
 
