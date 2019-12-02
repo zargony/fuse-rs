@@ -467,12 +467,103 @@ impl Filesystem for XmpFS {
         self.opened_directories.remove(&fh);
         reply.ok();
     }
+
+    fn readlink(&mut self, _req: &Request, ino: u64, reply: ReplyData) {
+        if ! self.inode_to_path.contains_key(&ino) {
+            return reply.error(ENOENT);
+        }
+
+        let entry_path = Path::new(&self.inode_to_path[&ino]);
+
+        match std::fs::read_link(entry_path) {
+            Err(e) => reply.error(errhandle(e, ||self.unregister_ino(ino))),
+            Ok(x) => {
+                reply.data(x.as_os_str().as_bytes());
+            }
+        }
+    }
+
+    fn mkdir(
+        &mut self, 
+        _req: &Request, 
+        parent: u64, 
+        name: &OsStr, 
+        _mode: u32, 
+        reply: ReplyEntry
+    ) {
+        if ! self.inode_to_path.contains_key(&parent) {
+            return reply.error(ENOENT);
+        }
+
+        let parent_path = Path::new(&self.inode_to_path[&parent]);
+        let entry_path = parent_path.join(name);
+
+        let ino = self.add_or_create_inode(&entry_path);
+        match std::fs::create_dir(&entry_path) {
+            Err(e) => reply.error(errhandle(e, ||())),
+            Ok(()) => {
+                let attr = match std::fs::symlink_metadata(entry_path) {
+                    Err(e) => {
+                        return reply.error(errhandle(e, ||self.unregister_ino(ino)));
+                    },
+                    Ok(m) => meta2attr(&m, ino),
+                };
+                
+                reply.entry(&TTL, &attr, 1);
+            }
+        }
+    }
+
+    fn unlink(
+        &mut self, 
+        _req: &Request, 
+        parent: u64, 
+        name: &OsStr, 
+        reply: ReplyEmpty
+    ) {
+        if ! self.inode_to_path.contains_key(&parent) {
+            return reply.error(ENOENT);
+        }
+
+        let parent_path = Path::new(&self.inode_to_path[&parent]);
+        let entry_path = parent_path.join(name);
+
+        
+        match std::fs::remove_file(entry_path) {
+            Err(e) => reply.error(errhandle(e, ||())),
+            Ok(()) => {
+                reply.ok();
+            }
+        }
+    }
+
+    fn rmdir(
+        &mut self, 
+        _req: &Request, 
+        parent: u64, 
+        name: &OsStr, 
+        reply: ReplyEmpty
+    ) {
+        if ! self.inode_to_path.contains_key(&parent) {
+            return reply.error(ENOENT);
+        }
+
+        let parent_path = Path::new(&self.inode_to_path[&parent]);
+        let entry_path = parent_path.join(name);
+
+        match std::fs::remove_dir(entry_path) {
+            Err(e) => reply.error(errhandle(e, ||())),
+            Ok(()) => {
+                reply.ok();
+            }
+        }
+    }
 }
 
 fn main() {
     env_logger::init();
     let mountpoint = env::args_os().nth(1).unwrap();
-    let options = ["-o", "rw", "-o", "fsname=xmp"]
+    let options = ["-o", "rw,default_permissions", "-o", "fsname=xmp"]
         .iter()
         .map(|o| o.as_ref())
         .collect::<Vec<&OsStr>>();
