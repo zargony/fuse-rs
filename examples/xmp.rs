@@ -399,8 +399,15 @@ impl Filesystem for XmpFS {
             },
             Ok(x) => {
                 let mut v : Vec<DirInfo> = Vec::with_capacity(x.size_hint().0);
-                v.push(DirInfo { ino, kind:FileType::Directory, name: OsStr::from_bytes(b".").to_os_string()});
-                v.push(DirInfo { ino, kind:FileType::Directory, name: OsStr::from_bytes(b"..").to_os_string()});
+
+                let parent_ino : u64 = if ino == 1 { 1 } else { match entry_path.parent() {
+                    None => ino,
+                    Some(x) => *self.path_to_inode.get(x.as_os_str()).unwrap_or(&ino),
+                }};
+
+                v.push(DirInfo { ino:ino,        kind:FileType::Directory, name: OsStr::from_bytes(b".").to_os_string()});
+                v.push(DirInfo { ino:parent_ino, kind:FileType::Directory, name: OsStr::from_bytes(b"..").to_os_string()});
+
                 for dee in x {
                     match dee {
                         Err(e) => {
