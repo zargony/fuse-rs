@@ -3,7 +3,7 @@
 //! A session runs a filesystem implementation while it is being mounted to a specific mount
 //! point. A session begins by mounting the filesystem and ends by unmounting it. While the
 //! filesystem is mounted, the session loop receives, dispatches and replies to kernel requests
-//! for filesystem operations under its mount point.
+//! for filesystem operations under its mountpoint.
 
 use std::ffi::OsStr;
 use std::fmt;
