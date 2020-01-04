@@ -69,7 +69,7 @@ impl ReplyEmpty {
     /// Reply to a request with nothing
     pub fn ok(mut self) {
         let payload = lowlevel::reply::Data::from(&[][..]);
-        let reply = lowlevel::reply::Reply::new(self.unique, Ok(&payload));
+        let reply = lowlevel::reply::Reply::new(self.unique, Ok(payload));
         let _ = self.sender.write_vectored(&reply.to_io_slices());
     }
 
@@ -99,7 +99,7 @@ impl ReplyData {
     /// Reply to a request with the given data
     pub fn data(mut self, data: &[u8]) {
         let payload = lowlevel::reply::Data::from(data);
-        let reply = lowlevel::reply::Reply::new(self.unique, Ok(&payload));
+        let reply = lowlevel::reply::Reply::new(self.unique, Ok(payload));
         let _ = self.sender.write_vectored(&reply.to_io_slices());
     }
 
@@ -129,7 +129,7 @@ impl ReplyInit {
     /// Reply to a request with the given entry
     pub fn init(mut self, major: u32, minor: u32, max_readahead: u32, flags: u32, max_write: u32) {
         let payload = lowlevel::reply::Init::new(major, minor, max_readahead, flags, max_write);
-        let reply = lowlevel::reply::Reply::new(self.unique, Ok(&payload));
+        let reply = lowlevel::reply::Reply::new(self.unique, Ok(payload));
         let _ = self.sender.write_vectored(&reply.to_io_slices());
     }
 
@@ -159,7 +159,7 @@ impl ReplyEntry {
     /// Reply to a request with the given entry
     pub fn entry(mut self, ttl: &Duration, attr: &FileAttr, generation: u64) {
         let payload = lowlevel::reply::Entry::new(ttl, attr, generation);
-        let reply = lowlevel::reply::Reply::new(self.unique, Ok(&payload));
+        let reply = lowlevel::reply::Reply::new(self.unique, Ok(payload));
         let _ = self.sender.write_vectored(&reply.to_io_slices());
     }
 
@@ -189,7 +189,7 @@ impl ReplyAttr {
     /// Reply to a request with the given attribute
     pub fn attr(mut self, ttl: &Duration, attr: &FileAttr) {
         let payload = lowlevel::reply::Attr::new(ttl, attr);
-        let reply = lowlevel::reply::Reply::new(self.unique, Ok(&payload));
+        let reply = lowlevel::reply::Reply::new(self.unique, Ok(payload));
         let _ = self.sender.write_vectored(&reply.to_io_slices());
     }
 
@@ -222,7 +222,7 @@ impl ReplyXTimes {
     /// Reply to a request with the given xtimes
     pub fn xtimes(mut self, bkuptime: SystemTime, crtime: SystemTime) {
         let payload = lowlevel::reply::XTimes::new(&bkuptime, &crtime);
-        let reply = lowlevel::reply::Reply::new(self.unique, Ok(&payload));
+        let reply = lowlevel::reply::Reply::new(self.unique, Ok(payload));
         let _ = self.sender.write_vectored(&reply.to_io_slices());
     }
 
@@ -252,7 +252,7 @@ impl ReplyOpen {
     /// Reply to a request with the given open result
     pub fn opened(mut self, fh: u64, flags: u32) {
         let payload = lowlevel::reply::Open::new(fh, flags);
-        let reply = lowlevel::reply::Reply::new(self.unique, Ok(&payload));
+        let reply = lowlevel::reply::Reply::new(self.unique, Ok(payload));
         let _ = self.sender.write_vectored(&reply.to_io_slices());
     }
 
@@ -282,7 +282,7 @@ impl ReplyWrite {
     /// Reply to a request with the given open result
     pub fn written(mut self, size: u32) {
         let payload = lowlevel::reply::Write::new(size);
-        let reply = lowlevel::reply::Reply::new(self.unique, Ok(&payload));
+        let reply = lowlevel::reply::Reply::new(self.unique, Ok(payload));
         let _ = self.sender.write_vectored(&reply.to_io_slices());
     }
 
@@ -312,7 +312,7 @@ impl ReplyStatfs {
     /// Reply to a request with the given open result
     pub fn statfs(mut self, blocks: u64, bfree: u64, bavail: u64, files: u64, ffree: u64, bsize: u32, namelen: u32, frsize: u32) {
         let payload = lowlevel::reply::StatFs::new(blocks, bfree, bavail, files, ffree, bsize, namelen, frsize);
-        let reply = lowlevel::reply::Reply::new(self.unique, Ok(&payload));
+        let reply = lowlevel::reply::Reply::new(self.unique, Ok(payload));
         let _ = self.sender.write_vectored(&reply.to_io_slices());
     }
 
@@ -342,7 +342,7 @@ impl ReplyCreate {
     /// Reply to a request with the given entry
     pub fn created(mut self, ttl: &Duration, attr: &FileAttr, generation: u64, fh: u64, flags: u32) {
         let payload = lowlevel::reply::Create::new(ttl, attr, generation, fh, flags);
-        let reply = lowlevel::reply::Reply::new(self.unique, Ok(&payload));
+        let reply = lowlevel::reply::Reply::new(self.unique, Ok(payload));
         let _ = self.sender.write_vectored(&reply.to_io_slices());
     }
 
@@ -372,7 +372,7 @@ impl ReplyLock {
     /// Reply to a request with the given open result
     pub fn locked(mut self, start: u64, end: u64, typ: u32, pid: u32) {
         let payload = lowlevel::reply::Lock::new(start, end, typ, pid);
-        let reply = lowlevel::reply::Reply::new(self.unique, Ok(&payload));
+        let reply = lowlevel::reply::Reply::new(self.unique, Ok(payload));
         let _ = self.sender.write_vectored(&reply.to_io_slices());
     }
 
@@ -402,7 +402,7 @@ impl ReplyBmap {
     /// Reply to a request with the given open result
     pub fn bmap(mut self, block: u64) {
         let payload = lowlevel::reply::Bmap::new(block);
-        let reply = lowlevel::reply::Reply::new(self.unique, Ok(&payload));
+        let reply = lowlevel::reply::Reply::new(self.unique, Ok(payload));
         let _ = self.sender.write_vectored(&reply.to_io_slices());
     }
 
@@ -458,7 +458,7 @@ impl ReplyDirectory {
     /// Reply to a request with the filled directory buffer
     pub fn ok(mut self) {
         let payload = lowlevel::reply::Data::from(self.data);
-        let reply = lowlevel::reply::Reply::new(self.unique, Ok(&payload));
+        let reply = lowlevel::reply::Reply::new(self.unique, Ok(payload));
         let _ = self.sender.write_vectored(&reply.to_io_slices());
     }
 
@@ -488,14 +488,14 @@ impl ReplyXattr {
     /// Reply to a request with the size of the xattr.
     pub fn size(mut self, size: u32) {
         let payload = lowlevel::reply::XAttrSize::new(size);
-        let reply = lowlevel::reply::Reply::new(self.unique, Ok(&payload));
+        let reply = lowlevel::reply::Reply::new(self.unique, Ok(payload));
         let _ = self.sender.write_vectored(&reply.to_io_slices());
     }
 
     /// Reply to a request with the data in the xattr.
     pub fn data(mut self, data: &[u8]) {
         let payload = lowlevel::reply::Data::from(data);
-        let reply = lowlevel::reply::Reply::new(self.unique, Ok(&payload));
+        let reply = lowlevel::reply::Reply::new(self.unique, Ok(payload));
         let _ = self.sender.write_vectored(&reply.to_io_slices());
     }
 

@@ -87,19 +87,27 @@ pub trait AsIoSlice {
 
 /// Low-level reply to report back the result of a filesystem operation to the kernel driver.
 #[derive(Debug)]
-pub(crate) struct Reply<'a, T> {
+pub(crate) struct Reply<T> {
     header: fuse_out_header,
-    payload: Option<&'a T>,
+    payload: Option<T>,
 }
 
-impl<'a, T: AsIoSlice> Reply<'a, T> {
+impl<T: AsIoSlice> Reply<T> {
     /// Create a new reply for the given request using the given payload.
     // FIXME: this should consume a `Request` instead of passing the unique id
-    pub fn new(unique: u64, res: Result<&'a T, c_int>) -> Self {
-        let len = res.map(|payload| payload.as_io_slice().len()).unwrap_or(0);
+    pub fn new(unique: u64, res: Result<T, c_int>) -> Self {
+        let payload_len = match res {
+            Ok(ref payload) => payload.as_io_slice().len(),
+            Err(_) => 0,
+        };
+        let len = mem::size_of::<fuse_out_header>() + payload_len;
+        let error = match res {
+            Ok(_) => 0,
+            Err(err) => -err,
+        };
         let header = fuse_out_header {
-            len: (mem::size_of::<fuse_out_header>() + len) as u32,
-            error: -res.err().unwrap_or(0) as i32,
+            len: len as u32,
+            error: error as i32,
             unique,
         };
         Self {
@@ -111,7 +119,7 @@ impl<'a, T: AsIoSlice> Reply<'a, T> {
     /// Convert the reply to a vector of byte slices that can be sent to the kernel driver.
     pub fn to_io_slices(&self) -> Vec<IoSlice<'_>> {
         let mut bufs = vec![as_io_slice(&self.header)];
-        if let Some(payload) = self.payload {
+        if let Some(ref payload) = self.payload {
             bufs.push(payload.as_io_slice());
         }
         bufs
@@ -495,7 +503,7 @@ impl XTimes {
 mod tests {
     use super::*;
 
-    fn concat_reply<T: AsIoSlice>(reply: &Reply<'_, T>) -> Vec<u8> {
+    fn concat_reply<T: AsIoSlice>(reply: &Reply<T>) -> Vec<u8> {
         reply
             .to_io_slices()
             .iter()
@@ -519,7 +527,7 @@ mod tests {
 
     #[test]
     fn error() {
-        let reply: Reply<'_, Attr> = Reply::new(0xdead_beef_baad_f00d, Err(66));
+        let reply: Reply<Attr> = Reply::new(0xdead_beef_baad_f00d, Err(66));
         assert_eq!(concat_reply(&reply), ERROR_REPLY);
     }
 
@@ -601,7 +609,7 @@ mod tests {
             flags: 0x1234,
         };
         let payload = Attr::new(&ttl, &attr);
-        let reply = Reply::new(0xdead_beef_baad_f00d, Ok(&payload));
+        let reply = Reply::new(0xdead_beef_baad_f00d, Ok(payload));
         assert_eq!(concat_reply(&reply), ATTR_REPLY);
     }
 
@@ -622,7 +630,7 @@ mod tests {
     #[test]
     fn bmap() {
         let payload = Bmap::new(0x1234);
-        let reply = Reply::new(0xdead_beef_baad_f00d, Ok(&payload));
+        let reply = Reply::new(0xdead_beef_baad_f00d, Ok(payload));
         assert_eq!(concat_reply(&reply), BMAP_REPLY);
     }
 
@@ -719,7 +727,7 @@ mod tests {
             flags: 0x1234,
         };
         let payload = Create::new(&ttl, &attr, 0x01, 0x05, 0x2345);
-        let reply = Reply::new(0xdead_beef_baad_f00d, Ok(&payload));
+        let reply = Reply::new(0xdead_beef_baad_f00d, Ok(payload));
         assert_eq!(concat_reply(&reply), CREATE_REPLY);
     }
 
@@ -741,7 +749,7 @@ mod tests {
     fn data_borrowed() {
         let data: &[u8] = &[0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08];
         let payload = Data::from(data);
-        let reply = Reply::new(0xdead_beef_baad_f00d, Ok(&payload));
+        let reply = Reply::new(0xdead_beef_baad_f00d, Ok(payload));
         assert_eq!(concat_reply(&reply), DATA_REPLY);
     }
 
@@ -749,7 +757,7 @@ mod tests {
     fn data_owned() {
         let data: Vec<u8> = vec![0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08];
         let payload = Data::from(data);
-        let reply = Reply::new(0xdead_beef_baad_f00d, Ok(&payload));
+        let reply = Reply::new(0xdead_beef_baad_f00d, Ok(payload));
         assert_eq!(concat_reply(&reply), DATA_REPLY);
     }
 
@@ -840,7 +848,7 @@ mod tests {
             flags: 0x1234,
         };
         let payload = Entry::new(&ttl, &attr, 0x01);
-        let reply = Reply::new(0xdead_beef_baad_f00d, Ok(&payload));
+        let reply = Reply::new(0xdead_beef_baad_f00d, Ok(payload));
         assert_eq!(concat_reply(&reply), ENTRY_REPLY);
     }
 
@@ -865,7 +873,7 @@ mod tests {
     #[test]
     fn init() {
         let payload = Init::new(0x1111, 0x2222, 0x3333, 0x4444, 0x5555);
-        let reply = Reply::new(0xdead_beef_baad_f00d, Ok(&payload));
+        let reply = Reply::new(0xdead_beef_baad_f00d, Ok(payload));
         assert_eq!(concat_reply(&reply), INIT_REPLY);
     }
 
@@ -890,7 +898,7 @@ mod tests {
     #[test]
     fn lock() {
         let payload = Lock::new(0x1111, 0x2222, 0x5555, 0xc0de_ba5e);
-        let reply = Reply::new(0xdead_beef_baad_f00d, Ok(&payload));
+        let reply = Reply::new(0xdead_beef_baad_f00d, Ok(payload));
         assert_eq!(concat_reply(&reply), LOCK_REPLY);
     }
 
@@ -913,7 +921,7 @@ mod tests {
     #[test]
     fn open() {
         let payload = Open::new(0x05, 0x2345);
-        let reply = Reply::new(0xdead_beef_baad_f00d, Ok(&payload));
+        let reply = Reply::new(0xdead_beef_baad_f00d, Ok(payload));
         assert_eq!(concat_reply(&reply), OPEN_REPLY);
     }
 
@@ -954,7 +962,7 @@ mod tests {
         let payload = StatFs::new(
             0x1111, 0x2222, 0x3333, 0x4444, 0x5555, 0x6666, 0x7777, 0x8888,
         );
-        let reply = Reply::new(0xdead_beef_baad_f00d, Ok(&payload));
+        let reply = Reply::new(0xdead_beef_baad_f00d, Ok(payload));
         assert_eq!(concat_reply(&reply), STATFS_REPLY);
     }
 
@@ -975,7 +983,7 @@ mod tests {
     #[test]
     fn write() {
         let payload = Write::new(0x1234_5678);
-        let reply = Reply::new(0xdead_beef_baad_f00d, Ok(&payload));
+        let reply = Reply::new(0xdead_beef_baad_f00d, Ok(payload));
         assert_eq!(concat_reply(&reply), WRITE_REPLY);
     }
 
@@ -996,7 +1004,7 @@ mod tests {
     #[test]
     fn xattrsize() {
         let payload = XAttrSize::new(0x1234_5678);
-        let reply = Reply::new(0xdead_beef_baad_f00d, Ok(&payload));
+        let reply = Reply::new(0xdead_beef_baad_f00d, Ok(payload));
         assert_eq!(concat_reply(&reply), XATTRSIZE_REPLY);
     }
 
@@ -1015,7 +1023,7 @@ mod tests {
         let bkuptime = UNIX_EPOCH + Duration::new(0x5bcd_a700, 0x1111_5555);
         let crtime = UNIX_EPOCH + Duration::new(0x524d_94a7, 0x1111_2222);
         let payload = XTimes::new(&bkuptime, &crtime);
-        let reply = Reply::new(0xdead_beef_baad_f00d, Ok(&payload));
+        let reply = Reply::new(0xdead_beef_baad_f00d, Ok(payload));
         assert_eq!(concat_reply(&reply), XTIMES_REPLY);
     }
 }
