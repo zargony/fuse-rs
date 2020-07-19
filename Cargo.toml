@@ -22,9 +22,9 @@ github = { repository = "zargony/fuse-rs" }
 [dependencies]
 fuse-abi = { path = "./fuse-abi", version = "=0.4.0-dev" }
 fuse-sys = { path = "./fuse-sys", version = "=0.4.0-dev" }
-libc = "0.2.51"
-log = "0.4.6"
+libc = "0.2.72"
+log = "0.4.11"
 thread-scoped = "1.0.2"
 
 [dev-dependencies]
-env_logger = "0.6.0"
+env_logger = "0.7.1"

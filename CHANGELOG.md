@@ -1,6 +1,6 @@
 # Rust FUSE - Changelog
 
-## 0.4.0 - UNRELEASED
+## 0.4.0 - 2020-07-20
 
 * Split into `fuse`, `fuse-abi` and `fuse-sys` crate
 * GitHub repository renamed to `fuse-rs` (previously `rust-fuse`)
