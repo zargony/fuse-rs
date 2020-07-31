@@ -92,11 +92,11 @@ mod tests {
         let arg: &TestArgument = unsafe { it.fetch().unwrap() };
         assert_eq!(arg.p1, 0x66);
         assert_eq!(arg.p2, 0x6f);
-        assert_eq!(arg.p3, 0x006f);
+        assert_eq!(u16::from_le(arg.p3), 0x006f);
         let arg: &TestArgument = unsafe { it.fetch().unwrap() };
         assert_eq!(arg.p1, 0x62);
         assert_eq!(arg.p2, 0x61);
-        assert_eq!(arg.p3, 0x0072);
+        assert_eq!(u16::from_le(arg.p3), 0x0072);
         assert_eq!(it.len(), 2);
     }
 
@@ -116,7 +116,7 @@ mod tests {
         let arg: &TestArgument = unsafe { it.fetch().unwrap() };
         assert_eq!(arg.p1, 0x66);
         assert_eq!(arg.p2, 0x6f);
-        assert_eq!(arg.p3, 0x006f);
+        assert_eq!(u16::from_le(arg.p3), 0x006f);
         let arg = unsafe { it.fetch_str().unwrap() };
         assert_eq!(arg, "bar");
         let arg = it.fetch_all();

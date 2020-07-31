@@ -3,7 +3,7 @@
 //! A request represents information about a filesystem operation the kernel driver wants us to
 //! perform.
 //!
-//! TODO: This module is meant to go away soon in favor of `ll::Request`.
+//! TODO: This module is meant to go away soon in favor of `lowlevel::Request`.
 
 use std::convert::TryFrom;
 use std::path::Path;
@@ -14,8 +14,8 @@ use fuse_abi::consts::*;
 use log::{debug, error, warn};
 
 use crate::channel::ChannelSender;
-use crate::ll;
-use crate::reply::{Reply, ReplyRaw, ReplyEmpty, ReplyDirectory};
+use crate::lowlevel;
+use crate::reply::{Reply, ReplyEmpty, ReplyInit, ReplyDirectory};
 use crate::session::{MAX_WRITE_SIZE, Session};
 use crate::Filesystem;
 
@@ -38,13 +38,13 @@ pub struct Request<'a> {
     /// Request raw data
     data: &'a [u8],
     /// Parsed request
-    request: ll::Request<'a>,
+    request: lowlevel::Request<'a>,
 }
 
 impl<'a> Request<'a> {
     /// Create a new request from the given data
     pub fn new(ch: ChannelSender, data: &'a [u8]) -> Option<Request<'a>> {
-        let request = match ll::Request::try_from(data) {
+        let request = match lowlevel::Request::try_from(data) {
             Ok(request) => request,
             Err(err) => {
                 // FIXME: Reply with ENOSYS?
@@ -64,8 +64,8 @@ impl<'a> Request<'a> {
 
         match self.request.operation() {
             // Filesystem initialization
-            ll::Operation::Init { arg } => {
-                let reply: ReplyRaw<fuse_init_out> = self.reply();
+            lowlevel::Operation::Init { arg } => {
+                let reply: ReplyInit = self.reply();
                 // We don't support ABI versions before 7.6
                 if arg.major < 7 || (arg.major == 7 && arg.minor < 6) {
                     error!("Unsupported FUSE ABI version {}.{}", arg.major, arg.minor);
@@ -84,17 +84,13 @@ impl<'a> Request<'a> {
                 // Reply with our desired version and settings. If the kernel supports a
                 // larger major version, it'll re-send a matching init message. If it
                 // supports only lower major versions, we replied with an error above.
-                let init = fuse_init_out {
-                    major: FUSE_KERNEL_VERSION,
-                    minor: FUSE_KERNEL_MINOR_VERSION,
-                    max_readahead: arg.max_readahead,       // accept any readahead size
-                    flags: arg.flags & INIT_FLAGS,          // use features given in INIT_FLAGS and reported as capable
-                    unused: 0,
-                    max_write: MAX_WRITE_SIZE as u32,       // use a max write size that fits into the session's buffer
-                };
-                debug!("INIT response: ABI {}.{}, flags {:#x}, max readahead {}, max write {}", init.major, init.minor, init.flags, init.max_readahead, init.max_write);
+                let (major, minor) = (FUSE_KERNEL_VERSION, FUSE_KERNEL_MINOR_VERSION);
+                let max_readahead = arg.max_readahead;      // accept any readahead size
+                let flags = arg.flags & INIT_FLAGS;         // use features given in INIT_FLAGS and reported as capable
+                let max_write = MAX_WRITE_SIZE as u32;      // use a max write size that fits into the session's buffer
+                debug!("INIT response: ABI {}.{}, flags {:#x}, max readahead {}, max write {}", major, minor, flags, max_readahead, max_write);
                 se.initialized = true;
-                reply.ok(&init);
+                reply.init(major, minor, max_readahead, flags, max_write);
             }
             // Any operation is invalid before initialization
             _ if !se.initialized => {
@@ -102,7 +98,7 @@ impl<'a> Request<'a> {
                 self.reply::<ReplyEmpty>().error(EIO);
             }
             // Filesystem destroyed
-            ll::Operation::Destroy => {
+            lowlevel::Operation::Destroy => {
                 se.filesystem.destroy(self);
                 se.destroyed = true;
                 self.reply::<ReplyEmpty>().ok();
@@ -113,21 +109,21 @@ impl<'a> Request<'a> {
                 self.reply::<ReplyEmpty>().error(EIO);
             }
 
-            ll::Operation::Interrupt { .. } => {
+            lowlevel::Operation::Interrupt { .. } => {
                 // TODO: handle FUSE_INTERRUPT
                 self.reply::<ReplyEmpty>().error(ENOSYS);
             }
 
-            ll::Operation::Lookup { name } => {
+            lowlevel::Operation::Lookup { name } => {
                 se.filesystem.lookup(self, self.request.nodeid(), &name, self.reply());
             }
-            ll::Operation::Forget { arg } => {
+            lowlevel::Operation::Forget { arg } => {
                 se.filesystem.forget(self, self.request.nodeid(), arg.nlookup); // no reply
             }
-            ll::Operation::GetAttr => {
+            lowlevel::Operation::GetAttr => {
                 se.filesystem.getattr(self, self.request.nodeid(), self.reply());
             }
-            ll::Operation::SetAttr { arg } => {
+            lowlevel::Operation::SetAttr { arg } => {
                 let mode = match arg.valid & FATTR_MODE {
                     0 => None,
                     _ => Some(arg.mode),
@@ -185,77 +181,77 @@ impl<'a> Request<'a> {
                 let (crtime, chgtime, bkuptime, flags) = get_macos_setattr(arg);
                 se.filesystem.setattr(self, self.request.nodeid(), mode, uid, gid, size, atime, mtime, fh, crtime, chgtime, bkuptime, flags, self.reply());
             }
-            ll::Operation::ReadLink => {
+            lowlevel::Operation::ReadLink => {
                 se.filesystem.readlink(self, self.request.nodeid(), self.reply());
             }
-            ll::Operation::MkNod { arg, name } => {
+            lowlevel::Operation::MkNod { arg, name } => {
                 se.filesystem.mknod(self, self.request.nodeid(), &name, arg.mode, arg.rdev, self.reply());
             }
-            ll::Operation::MkDir { arg, name } => {
+            lowlevel::Operation::MkDir { arg, name } => {
                 se.filesystem.mkdir(self, self.request.nodeid(), &name, arg.mode, self.reply());
             }
-            ll::Operation::Unlink { name } => {
+            lowlevel::Operation::Unlink { name } => {
                 se.filesystem.unlink(self, self.request.nodeid(), &name, self.reply());
             }
-            ll::Operation::RmDir { name } => {
+            lowlevel::Operation::RmDir { name } => {
                 se.filesystem.rmdir(self, self.request.nodeid(), &name, self.reply());
             }
-            ll::Operation::SymLink { name, link } => {
+            lowlevel::Operation::SymLink { name, link } => {
                 se.filesystem.symlink(self, self.request.nodeid(), &name, &Path::new(link), self.reply());
             }
-            ll::Operation::Rename { arg, name, newname } => {
+            lowlevel::Operation::Rename { arg, name, newname } => {
                 se.filesystem.rename(self, self.request.nodeid(), &name, arg.newdir, &newname, self.reply());
             }
-            ll::Operation::Link { arg, name } => {
+            lowlevel::Operation::Link { arg, name } => {
                 se.filesystem.link(self, arg.oldnodeid, self.request.nodeid(), &name, self.reply());
             }
-            ll::Operation::Open { arg } => {
+            lowlevel::Operation::Open { arg } => {
                 se.filesystem.open(self, self.request.nodeid(), arg.flags, self.reply());
             }
-            ll::Operation::Read { arg } => {
+            lowlevel::Operation::Read { arg } => {
                 se.filesystem.read(self, self.request.nodeid(), arg.fh, arg.offset as i64, arg.size, self.reply());
             }
-            ll::Operation::Write { arg, data } => {
+            lowlevel::Operation::Write { arg, data } => {
                 assert!(data.len() == arg.size as usize);
                 se.filesystem.write(self, self.request.nodeid(), arg.fh, arg.offset as i64, data, arg.write_flags, self.reply());
             }
-            ll::Operation::Flush { arg } => {
+            lowlevel::Operation::Flush { arg } => {
                 se.filesystem.flush(self, self.request.nodeid(), arg.fh, arg.lock_owner, self.reply());
             }
-            ll::Operation::Release { arg } => {
+            lowlevel::Operation::Release { arg } => {
                 let flush = match arg.release_flags & FUSE_RELEASE_FLUSH {
                     0 => false,
                     _ => true,
                 };
                 se.filesystem.release(self, self.request.nodeid(), arg.fh, arg.flags, arg.lock_owner, flush, self.reply());
             }
-            ll::Operation::FSync { arg } => {
+            lowlevel::Operation::FSync { arg } => {
                 let datasync = match arg.fsync_flags & 1 {
                     0 => false,
                     _ => true,
                 };
                 se.filesystem.fsync(self, self.request.nodeid(), arg.fh, datasync, self.reply());
             }
-            ll::Operation::OpenDir { arg } => {
+            lowlevel::Operation::OpenDir { arg } => {
                 se.filesystem.opendir(self, self.request.nodeid(), arg.flags, self.reply());
             }
-            ll::Operation::ReadDir { arg } => {
+            lowlevel::Operation::ReadDir { arg } => {
                 se.filesystem.readdir(self, self.request.nodeid(), arg.fh, arg.offset as i64, ReplyDirectory::new(self.request.unique(), self.ch, arg.size as usize));
             }
-            ll::Operation::ReleaseDir { arg } => {
+            lowlevel::Operation::ReleaseDir { arg } => {
                 se.filesystem.releasedir(self, self.request.nodeid(), arg.fh, arg.flags, self.reply());
             }
-            ll::Operation::FSyncDir { arg } => {
+            lowlevel::Operation::FSyncDir { arg } => {
                 let datasync = match arg.fsync_flags & 1 {
                     0 => false,
                     _ => true,
                 };
                 se.filesystem.fsyncdir(self, self.request.nodeid(), arg.fh, datasync, self.reply());
             }
-            ll::Operation::StatFs => {
+            lowlevel::Operation::StatFs => {
                 se.filesystem.statfs(self, self.request.nodeid(), self.reply());
             }
-            ll::Operation::SetXAttr { arg, name, value } => {
+            lowlevel::Operation::SetXAttr { arg, name, value } => {
                 assert!(value.len() == arg.size as usize);
                 #[cfg(target_os = "macos")]
                 #[inline]
@@ -265,44 +261,44 @@ impl<'a> Request<'a> {
                 fn get_position (_arg: &fuse_setxattr_in) -> u32 { 0 }
                 se.filesystem.setxattr(self, self.request.nodeid(), name, value, arg.flags, get_position(arg), self.reply());
             }
-            ll::Operation::GetXAttr { arg, name } => {
+            lowlevel::Operation::GetXAttr { arg, name } => {
                 se.filesystem.getxattr(self, self.request.nodeid(), name, arg.size, self.reply());
             }
-            ll::Operation::ListXAttr { arg } => {
+            lowlevel::Operation::ListXAttr { arg } => {
                 se.filesystem.listxattr(self, self.request.nodeid(), arg.size, self.reply());
             }
-            ll::Operation::RemoveXAttr { name } => {
+            lowlevel::Operation::RemoveXAttr { name } => {
                 se.filesystem.removexattr(self, self.request.nodeid(), name, self.reply());
             }
-            ll::Operation::Access { arg } => {
+            lowlevel::Operation::Access { arg } => {
                 se.filesystem.access(self, self.request.nodeid(), arg.mask, self.reply());
             }
-            ll::Operation::Create { arg, name } => {
+            lowlevel::Operation::Create { arg, name } => {
                 se.filesystem.create(self, self.request.nodeid(), &name, arg.mode, arg.flags, self.reply());
             }
-            ll::Operation::GetLk { arg } => {
+            lowlevel::Operation::GetLk { arg } => {
                 se.filesystem.getlk(self, self.request.nodeid(), arg.fh, arg.owner, arg.lk.start, arg.lk.end, arg.lk.typ, arg.lk.pid, self.reply());
             }
-            ll::Operation::SetLk { arg } => {
+            lowlevel::Operation::SetLk { arg } => {
                 se.filesystem.setlk(self, self.request.nodeid(), arg.fh, arg.owner, arg.lk.start, arg.lk.end, arg.lk.typ, arg.lk.pid, false, self.reply());
             }
-            ll::Operation::SetLkW { arg } => {
+            lowlevel::Operation::SetLkW { arg } => {
                 se.filesystem.setlk(self, self.request.nodeid(), arg.fh, arg.owner, arg.lk.start, arg.lk.end, arg.lk.typ, arg.lk.pid, true, self.reply());
             }
-            ll::Operation::BMap { arg } => {
+            lowlevel::Operation::BMap { arg } => {
                 se.filesystem.bmap(self, self.request.nodeid(), arg.blocksize, arg.block, self.reply());
             }
 
             #[cfg(target_os = "macos")]
-            ll::Operation::SetVolName { name } => {
+            lowlevel::Operation::SetVolName { name } => {
                 se.filesystem.setvolname(self, name, self.reply());
             }
             #[cfg(target_os = "macos")]
-            ll::Operation::GetXTimes => {
+            lowlevel::Operation::GetXTimes => {
                 se.filesystem.getxtimes(self, self.request.nodeid(), self.reply());
             }
             #[cfg(target_os = "macos")]
-            ll::Operation::Exchange { arg, oldname, newname } => {
+            lowlevel::Operation::Exchange { arg, oldname, newname } => {
                 se.filesystem.exchange(self, arg.olddir, &oldname, arg.newdir, &newname, arg.options, self.reply());
             }
         }
