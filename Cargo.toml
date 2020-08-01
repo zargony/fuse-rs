@@ -13,7 +13,8 @@ categories = ["api-bindings", "filesystem"]
 license = "MIT"
 
 [badges]
-travis-ci = { repository = "zargony/rust-fuse" }
+cirrus-ci = { repository = "zargony/fuse-rs" }
+github = { repository = "zargony/fuse-rs" }
 
 [build-dependencies]
 pkg-config = "0.3"

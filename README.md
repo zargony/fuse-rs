@@ -1,8 +1,7 @@
 # Rust FUSE - Filesystem in Userspace
 
-[![Build Status](https://travis-ci.org/zargony/rust-fuse.svg?branch=master)](https://travis-ci.org/zargony/rust-fuse)
-[![Crates.io](https://img.shields.io/crates/v/fuse.svg)](https://crates.io/crates/fuse)
-[![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/zargony/rust-fuse/blob/master/LICENSE.md)
+![Crates.io](https://img.shields.io/crates/l/fuse)
+[![Crates.io](https://img.shields.io/crates/v/fuse)](https://crates.io/crates/fuse)
 
 ## About
 
