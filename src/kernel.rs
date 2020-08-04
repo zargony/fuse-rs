@@ -33,16 +33,16 @@ pub struct fuse_attr {
     pub ino: u64,
     pub size: u64,
     pub blocks: u64,
-    pub atime: i64,
-    pub mtime: i64,
-    pub ctime: i64,
+    pub atime: u64,
+    pub mtime: u64,
+    pub ctime: u64,
     #[cfg(target_os = "macos")]
-    pub crtime: i64,
-    pub atimensec: i32,
-    pub mtimensec: i32,
-    pub ctimensec: i32,
+    pub crtime: u64,
+    pub atimensec: u32,
+    pub mtimensec: u32,
+    pub ctimensec: u32,
     #[cfg(target_os = "macos")]
-    pub crtimensec: i32,
+    pub crtimensec: u32,
     pub mode: u32,
     pub nlink: u32,
     pub uid: u32,
@@ -222,10 +222,10 @@ impl fuse_opcode {
 pub struct fuse_entry_out {
     pub nodeid: u64,
     pub generation: u64,
-    pub entry_valid: i64,
-    pub attr_valid: i64,
-    pub entry_valid_nsec: i32,
-    pub attr_valid_nsec: i32,
+    pub entry_valid: u64,
+    pub attr_valid: u64,
+    pub entry_valid_nsec: u32,
+    pub attr_valid_nsec: u32,
     pub attr: fuse_attr,
 }
 
@@ -238,8 +238,8 @@ pub struct fuse_forget_in {
 #[repr(C)]
 #[derive(Debug)]
 pub struct fuse_attr_out {
-    pub attr_valid: i64,
-    pub attr_valid_nsec: i32,
+    pub attr_valid: u64,
+    pub attr_valid_nsec: u32,
     pub dummy: u32,
     pub attr: fuse_attr,
 }
@@ -248,10 +248,10 @@ pub struct fuse_attr_out {
 #[repr(C)]
 #[derive(Debug)]
 pub struct fuse_getxtimes_out {
-    pub bkuptime: i64,
-    pub crtime: i64,
-    pub bkuptimensec: i32,
-    pub crtimensec: i32,
+    pub bkuptime: u64,
+    pub crtime: u64,
+    pub bkuptimensec: u32,
+    pub crtimensec: u32,
 }
 
 #[repr(C)]
@@ -297,11 +297,11 @@ pub struct fuse_setattr_in {
     pub fh: u64,
     pub size: u64,
     pub unused1: u64,
-    pub atime: i64,
-    pub mtime: i64,
+    pub atime: u64,
+    pub mtime: u64,
     pub unused2: u64,
-    pub atimensec: i32,
-    pub mtimensec: i32,
+    pub atimensec: u32,
+    pub mtimensec: u32,
     pub unused3: u32,
     pub mode: u32,
     pub unused4: u32,
@@ -309,17 +309,17 @@ pub struct fuse_setattr_in {
     pub gid: u32,
     pub unused5: u32,
     #[cfg(target_os = "macos")]
-    pub bkuptime: i64,
+    pub bkuptime: u64,
     #[cfg(target_os = "macos")]
-    pub chgtime: i64,
+    pub chgtime: u64,
     #[cfg(target_os = "macos")]
-    pub crtime: i64,
+    pub crtime: u64,
     #[cfg(target_os = "macos")]
-    pub bkuptimensec: i32,
+    pub bkuptimensec: u32,
     #[cfg(target_os = "macos")]
-    pub chgtimensec: i32,
+    pub chgtimensec: u32,
     #[cfg(target_os = "macos")]
-    pub crtimensec: i32,
+    pub crtimensec: u32,
     #[cfg(target_os = "macos")]
     pub flags: u32,                                     // see chflags(2)
 }
