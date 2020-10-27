@@ -10,7 +10,7 @@ jobs:
       matrix:
         os:
           - ubuntu-latest
-          - macos-latest
+          #- macos-latest
         rust:
           - 1.39.0
           - stable
