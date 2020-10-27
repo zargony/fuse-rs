@@ -1,0 +1,35 @@
+[package]
+name = "fuse-abi"
+edition = "2018"
+version = "0.4.0-dev"
+authors = ["Andreas Neuhaus <zargony@zargony.com>"]
+description = "ABI types for communicating with the FUSE kernel interface"
+documentation = "https://docs.rs/fuse"
+homepage = "https://github.com/zargony/fuse-rs"
+repository = "https://github.com/zargony/fuse-rs"
+readme = "README.md"
+keywords = ["fuse", "filesystem", "system", "bindings"]
+categories = ["external-ffi-bindings", "filesystem", "os::unix-apis"]
+license = "MIT"
+
+[dependencies]
+
+[features]
+default = [ "abi-7-26" ]
+abi-7-9 = []
+abi-7-10 = ["abi-7-9"]
+abi-7-11 = ["abi-7-10"]
+abi-7-12 = ["abi-7-11"]
+abi-7-13 = ["abi-7-12"]
+abi-7-14 = ["abi-7-13"]
+abi-7-15 = ["abi-7-14"]
+abi-7-16 = ["abi-7-15"]
+abi-7-17 = ["abi-7-16"]
+abi-7-18 = ["abi-7-17"]
+abi-7-19 = ["abi-7-18"]
+abi-7-21 = ["abi-7-19"]
+abi-7-22 = ["abi-7-21"]
+abi-7-23 = ["abi-7-22"]
+abi-7-24 = ["abi-7-23"]
+abi-7-25 = ["abi-7-24"]
+abi-7-26 = ["abi-7-25"]

@@ -3,21 +3,20 @@
 //! Raw communication channel to the FUSE kernel driver.
 
 use std::io;
-use sys;
-use std::ffi::{CString, CStr, OsStr};
-use std::os::unix::ffi::OsStrExt;
 use std::path::{PathBuf, Path};
-use libc::{self, c_int, c_void, size_t, F_SETPIPE_SZ, SPLICE_F_MOVE, SPLICE_F_NONBLOCK};
-use std::os::unix::io::RawFd;
 #[cfg(feature = "libfuse")]
 use libfuse::{fuse_args, fuse_mount_compat25};
-use reply::ReplySender;
+use libc::{self, c_void, size_t};
+use std::os::unix::io::RawFd;
+use log::error;
+
+use crate::reply::ReplySender;
 
 /// Helper function to provide options as a fuse_args struct
 /// (which contains an argc count and an argv pointer)
 #[cfg(feature = "libfuse")]
 fn with_fuse_args<T, F: FnOnce(&fuse_args) -> T>(options: &[&OsStr], f: F) -> T {
-    let mut args = vec![CString::new("rust-fuse").unwrap()];
+    let mut args = vec![CString::new("fuse-rs").unwrap()];
     args.extend(options.iter().map(|s| CString::new(s.as_bytes()).unwrap()));
     let argptrs: Vec<_> = args.iter().map(|s| s.as_ptr()).collect();
     f(&fuse_args { argc: argptrs.len() as i32, argv: argptrs.as_ptr(), allocated: 0 })
@@ -27,17 +26,7 @@ fn with_fuse_args<T, F: FnOnce(&fuse_args) -> T>(options: &[&OsStr], f: F) -> T 
 #[derive(Debug)]
 pub struct Channel {
     mountpoint: PathBuf,
-    pub fd: RawFd,
-    pub read_pipe_fd: RawFd,
-    pub write_pipe_fd: RawFd,
-}
-
-fn create_pipe(buffer_size: usize) -> io::Result<[RawFd; 2]> {
-    let pipe = try!(sys::pipe());
-    if sys::DEFAULT_PIPE_SIZE != buffer_size {
-        try!(sys::fcntl(pipe[0], F_SETPIPE_SZ, buffer_size + 4096));
-    }
-    Ok(pipe)
+    pub fd: RawFd
 }
 
 impl Channel {
@@ -46,37 +35,21 @@ impl Channel {
     /// the given path to the channel. If the channel is dropped, the path is
     /// unmounted.
     #[cfg(feature = "libfuse")]
-    pub fn new(mountpoint: &Path, options: &[&OsStr], buffer_size: usize) -> io::Result<Channel> {
-        let mountpoint = try!(mountpoint.canonicalize());
+    pub fn new(mountpoint: &Path, options: &[&OsStr]) -> io::Result<Channel> {
+        let mountpoint = mountpoint.canonicalize()?;
         with_fuse_args(options, |args| {
-            let mnt = try!(CString::new(mountpoint.as_os_str().as_bytes()));
-            let pipe = try!(create_pipe(buffer_size));
+            let mnt = CString::new(mountpoint.as_os_str().as_bytes())?;
             let fd = unsafe { fuse_mount_compat25(mnt.as_ptr(), args) };
             if fd < 0 {
-                unsafe {
-                    libc::close(pipe[0]);
-                    libc::close(pipe[1]);
-                };
                 Err(io::Error::last_os_error())
             } else {
-                Ok(Channel {
-                    mountpoint: mountpoint,
-                    fd: fd,
-                    read_pipe_fd: pipe[0],
-                    write_pipe_fd: pipe[1],
-                })
+                Ok(Channel { mountpoint: mountpoint, fd: fd })
             }
         })
     }
 
-    pub fn new_from_fd(fd: RawFd, mountpoint: &Path, buffer_size: usize) -> io::Result<Channel> {
-        let pipe = try!(create_pipe(buffer_size));
-        Ok(Channel {
-            fd: fd,
-            mountpoint: mountpoint.to_path_buf(),
-            read_pipe_fd: pipe[0],
-            write_pipe_fd: pipe[1],
-        })
+    pub fn new_from_fd(fd: RawFd, mountpoint: &Path) -> io::Result<Channel> {
+        Ok(Channel { fd: fd, mountpoint: mountpoint.to_path_buf() })
     }
 
     /// Return path of the mounted filesystem
@@ -84,7 +57,7 @@ impl Channel {
         &self.mountpoint
     }
 
-    /// receives data up to the capacity of the given buffer (can block).
+    /// Receives data up to the capacity of the given buffer (can block).
     pub fn receive(&self, buffer: &mut Vec<u8>) -> io::Result<()> {
         let rc = unsafe { libc::read(self.fd, buffer.as_ptr() as *mut c_void, buffer.capacity() as size_t) };
         if rc < 0 {
@@ -93,11 +66,6 @@ impl Channel {
             unsafe { buffer.set_len(rc as usize); }
             Ok(())
         }
-    }
-
-    /// receives data up to the capacity of the given buffer (can block).
-    pub fn receive_splice(&self, buffer_size: usize) -> io::Result<size_t> {
-        Ok(try!(sys::splice(self.fd, None, self.write_pipe_fd, None, buffer_size, 0)))
     }
 
     /// Returns a sender object for this channel. The sender object can be
@@ -116,12 +84,8 @@ impl Drop for Channel {
     fn drop(&mut self) {
         // TODO: send ioctl FUSEDEVIOCSETDAEMONDEAD on macOS before closing the fd
         // Close the communication channel to the kernel driver
-        // (closing it before unmount prevents sync unmount deadlock)
-        unsafe {
-            libc::close(self.fd);
-            libc::close(self.read_pipe_fd);
-            libc::close(self.write_pipe_fd);
-        }
+        // (closing it before unnmount prevents sync unmount deadlock)
+        unsafe { libc::close(self.fd); }
         // Unmount this channel's mount point
         #[cfg(feature = "libfuse")]
         let _ = unmount(&self.mountpoint);
@@ -154,13 +118,6 @@ impl ReplySender for ChannelSender {
             error!("Failed to send FUSE reply: {}", err);
         }
     }
-
-    fn splice(&self, from: RawFd, size: usize) {
-        let res = sys::splice(from, None, self.fd, None, size, SPLICE_F_MOVE|SPLICE_F_NONBLOCK);
-        if let Err(err) = res {
-            error!("Failed to splice FUSE reply: {}", err);
-        };
-    }
 }
 
 /// Unmount an arbitrary mount point
@@ -184,7 +141,7 @@ pub fn unmount(mountpoint: &Path) -> io::Result<()> {
                   target_os = "openbsd", target_os = "bitrig", target_os = "netbsd")))]
     #[inline]
     fn libc_umount(mnt: &CStr) -> c_int {
-        use libfuse::fuse_unmount_compat22;
+        use fuse_sys::fuse_unmount_compat22;
         use std::io::ErrorKind::PermissionDenied;
 
         let rc = unsafe { libc::umount(mnt.as_ptr()) };
@@ -198,7 +155,7 @@ pub fn unmount(mountpoint: &Path) -> io::Result<()> {
         }
     }
 
-    let mnt = try!(CString::new(mountpoint.as_os_str().as_bytes()));
+    let mnt = CString::new(mountpoint.as_os_str().as_bytes())?;
     let rc = libc_umount(&mnt);
     if rc < 0 {
         Err(io::Error::last_os_error())
@@ -217,7 +174,7 @@ mod test {
     fn fuse_args() {
         with_fuse_args(&[OsStr::new("foo"), OsStr::new("bar")], |args| {
             assert_eq!(args.argc, 3);
-            assert_eq!(unsafe { CStr::from_ptr(*args.argv.offset(0)).to_bytes() }, b"rust-fuse");
+            assert_eq!(unsafe { CStr::from_ptr(*args.argv.offset(0)).to_bytes() }, b"fuse-rs");
             assert_eq!(unsafe { CStr::from_ptr(*args.argv.offset(1)).to_bytes() }, b"foo");
             assert_eq!(unsafe { CStr::from_ptr(*args.argv.offset(2)).to_bytes() }, b"bar");
         });
