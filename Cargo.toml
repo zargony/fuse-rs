@@ -30,7 +30,7 @@ env_logger = "0.6.0"
 
 [features]
 default = ["libfuse"]
-libfuse = []
+libfuse = [ "fuse-sys/libfuse" ]
 
 [[example]]
 name = "hello"
