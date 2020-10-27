@@ -6,15 +6,22 @@
 //! for filesystem operations under its mount point.
 
 use std::io;
-use std::ffi::OsStr;
 use std::fmt;
+#[cfg(feature = "libfuse")]
+use std::ffi::OsStr;
 use std::os::unix::io::RawFd;
 use std::path::{PathBuf, Path};
 use thread_scoped::{scoped, JoinGuard};
 use libc::{EAGAIN, EINTR, ENODEV, ENOENT};
-use channel::{self, Channel};
-use Filesystem;
-use request;
+use log::info;
+#[cfg(feature = "libfuse")]
+use log::error;
+
+#[cfg(feature = "libfuse")]
+use crate::channel;
+use crate::channel::Channel;
+use crate::request::Request;
+use crate::Filesystem;
 
 /// The max size of write requests from the kernel. The absolute minimum is 4k,
 /// FUSE recommends at least 128k, max 16M. The FUSE default is 16M on macOS
@@ -43,8 +50,6 @@ pub struct Session<FS: Filesystem> {
     pub initialized: bool,
     /// True if the filesystem was destroyed (destroy operation done)
     pub destroyed: bool,
-    /// True, if splice() syscall should be used for /dev/fuse
-    pub splice_write: bool,
     /// Number of queued requests in the kernel
     pub max_background: u16,
     /// Threshold when waiting fuse users are put into sleep state instead of busy loop
@@ -54,9 +59,9 @@ pub struct Session<FS: Filesystem> {
 impl<FS: Filesystem> Session<FS> {
     /// Create a new session by mounting the given filesystem to the given mountpoint
     #[cfg(feature = "libfuse")]
-    pub fn new(filesystem: FS, mountpoint: &Path, options: &[&OsStr], splice_write: bool, max_background: u16, congestion_threshold: u16) -> io::Result<Session<FS>> {
+    pub fn new(filesystem: FS, mountpoint: &Path, options: &[&OsStr], max_background: u16, congestion_threshold: u16) -> io::Result<Session<FS>> {
         info!("Mounting {}", mountpoint.display());
-        Channel::new(mountpoint, options, BUFFER_SIZE).map(|ch| {
+        Channel::new(mountpoint, options).map(|ch| {
             Session {
                 filesystem: filesystem,
                 ch: ch,
@@ -64,7 +69,6 @@ impl<FS: Filesystem> Session<FS> {
                 proto_minor: 0,
                 initialized: false,
                 destroyed: false,
-                splice_write: splice_write,
                 max_background: max_background,
                 congestion_threshold: congestion_threshold
             }
@@ -72,17 +76,16 @@ impl<FS: Filesystem> Session<FS> {
     }
 
     /// Create a new session by using a file descriptor "/dev/fuse"
-    pub fn new_from_fd(filesystem: FS, fd: RawFd, mountpoint: &Path, splice_write: bool, max_background: u16, congestion_threshold: u16) -> io::Result<Session<FS>> {
+    pub fn new_from_fd(filesystem: FS, fd: RawFd, mountpoint: &Path, max_background: u16, congestion_threshold: u16) -> io::Result<Session<FS>> {
         Ok(Session {
             filesystem: filesystem,
-            ch: try!(Channel::new_from_fd(fd, mountpoint, BUFFER_SIZE)),
+            ch: Channel::new_from_fd(fd, mountpoint)?,
             proto_major: 0,
             proto_minor: 0,
             // This hacky in general, but ok for CntrFS,
             // we need this in CntrFs to support multi-threading.
             initialized: true,
             destroyed: false,
-            splice_write: splice_write,
             max_background: max_background,
             congestion_threshold: congestion_threshold
         })
@@ -98,72 +101,18 @@ impl<FS: Filesystem> Session<FS> {
     /// having multiple buffers (which take up much memory), but the filesystem methods
     /// may run concurrent by spawning threads.
     pub fn run(&mut self) -> io::Result<()> {
-        if self.splice_write {
-            self.run_splice_write()
-        } else {
-            self.run_no_splice_write()
-        }
-    }
-
-    fn run_no_splice_write(&mut self) -> io::Result<()> {
-        let mut buffer: Vec<u8> = vec![0; BUFFER_SIZE];
-
+        // Buffer for receiving requests from the kernel. Only one is allocated and
+        // it is reused immediately after dispatching to conserve memory and allocations.
+        let mut buffer: Vec<u8> = Vec::with_capacity(BUFFER_SIZE);
         loop {
             // Read the next request from the given channel to kernel driver
             // The kernel driver makes sure that we get exactly one request per read
             match self.ch.receive(&mut buffer) {
-                Ok(()) => {
-                    match request::request(self.ch.sender(), &buffer) {
-                        // Dispatch request
-                        Some(req) => {
-                            let read_pipe_fd = self.ch.read_pipe_fd;
-                            let write_pipe_fd = self.ch.write_pipe_fd;
-
-                            request::dispatch(&req, self, read_pipe_fd, write_pipe_fd);
-                        },
-                        // Quit loop on illegal request
-                        None => break,
-                    }
-                },
-                Err(err) => match err.raw_os_error() {
-                    // Operation interrupted. Accordingly to FUSE, this is safe to retry
-                    Some(ENOENT) => continue,
-                    // Interrupted system call, retry
-                    Some(EINTR) => continue,
-                    // Explicitly try again
-                    Some(EAGAIN) => continue,
-                    // Filesystem was unmounted, quit the loop
-                    Some(ENODEV) => break,
-                    // Unhandled error
-                    _ => return Err(err),
-                }
-            }
-        }
-        Ok(())
-    }
-
-    fn run_splice_write(&mut self) -> io::Result<()> {
-        // Buffer for receiving requests from the kernel. Only one is allocated and
-        // it is reused immediately after dispatching to conserve memory and allocations.
-        // For small requests we copy the whole requests to this buffer
-        let mut buffer: Vec<u8> = vec![0; MAX_WRITE_SIZE];
-
-        loop {
-            // Read the next request from the given channel to kernel driver
-            // The kernel driver makes sure that we get exactly one request per read
-            match self.ch.receive_splice(MAX_WRITE_SIZE) {
-                Ok(size) => {
-                    match request::request_splice(self.ch.sender(), &mut buffer, self.ch.read_pipe_fd, size) {
-                        // Dispatch request
-                        Some(req) => {
-                            let read_pipe_fd = self.ch.read_pipe_fd;
-                            let write_pipe_fd = self.ch.write_pipe_fd;
-
-                            request::dispatch(&req, self, read_pipe_fd, write_pipe_fd);
-                        },
-                        // Quit loop on illegal request
-                        None => break,
-                    }
+                Ok(()) => match Request::new(self.ch.sender(), &buffer) {
+                    // Dispatch request
+                    Some(req) => req.dispatch(self),
+                    // Quit loop on illegal request
+                    None => break,
                 },
                 Err(err) => match err.raw_os_error() {
                     // Operation interrupted. Accordingly to FUSE, this is safe to retry
@@ -234,7 +183,7 @@ impl<'a> Drop for BackgroundSession<'a> {
 // replace with #[derive(Debug)] if Debug ever gets implemented for
 // thread_scoped::JoinGuard
 impl<'a> fmt::Debug for BackgroundSession<'a> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
         write!(f, "BackgroundSession {{ mountpoint: {:?}, guard: JoinGuard<()> }}", self.mountpoint)
     }
 }

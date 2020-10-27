@@ -12,28 +12,26 @@ use std::ffi::OsStr;
 use std::fmt;
 use std::marker::PhantomData;
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::io::RawFd;
-use libc::{self, c_int, size_t, c_void, S_IFIFO, S_IFCHR, S_IFBLK, S_IFDIR, S_IFREG, S_IFLNK, S_IFSOCK, EIO, SPLICE_F_MOVE, SPLICE_F_NONBLOCK};
-use time::Timespec;
-use kernel::{fuse_attr, fuse_kstatfs, fuse_file_lock, fuse_entry_out, fuse_attr_out, fuse_lseek_out};
-use kernel::{fuse_open_out, fuse_write_out, fuse_statfs_out, fuse_lk_out, fuse_bmap_out, fuse_ioctl_out};
-use kernel::fuse_getxattr_out;
+use std::time::{Duration, SystemTime, SystemTimeError, UNIX_EPOCH};
+use fuse_abi::{fuse_attr, fuse_kstatfs, fuse_file_lock, fuse_entry_out, fuse_attr_out, fuse_lseek_out};
+use fuse_abi::{fuse_open_out, fuse_write_out, fuse_statfs_out, fuse_lk_out, fuse_bmap_out, fuse_ioctl_out};
+use fuse_abi::fuse_getxattr_out;
 #[cfg(target_os = "macos")]
-use kernel::fuse_getxtimes_out;
-use kernel::{fuse_out_header, fuse_dirent, fuse_direntplus};
-use sys;
-use {FileType, FileAttr};
+use fuse_abi::fuse_getxtimes_out;
+use fuse_abi::{fuse_out_header, fuse_dirent, fuse_direntplus};
+use libc::{self, c_int, S_IFIFO, S_IFCHR, S_IFBLK, S_IFDIR, S_IFREG, S_IFLNK, S_IFSOCK, EIO};
+use log::{warn, debug};
+
+use crate::{FileType, FileAttr};
 
 /// Generic reply callback to send data
 pub trait ReplySender: Send + 'static {
     /// Send data.
     fn send(&self, data: &[&[u8]]);
-
-    fn splice(&self, from: RawFd, size: usize);
 }
 
-impl fmt::Debug for Box<ReplySender> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+impl fmt::Debug for Box<dyn ReplySender> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
         write!(f, "Box<ReplySender>")
     }
 }
@@ -57,6 +55,11 @@ fn as_bytes<T, U, F: FnOnce(&[&[u8]]) -> U>(data: &T, f: F) -> U {
     }
 }
 
+fn time_from_system_time(system_time: &SystemTime) -> Result<(u64, u32), SystemTimeError> {
+    let duration = system_time.duration_since(UNIX_EPOCH)?;
+    Ok((duration.as_secs(), duration.subsec_nanos()))
+}
+
 // Some platforms like Linux x86_64 have mode_t = u32, and lint warns of a trivial_numeric_casts.
 // But others like macOS x86_64 have mode_t = u16, requiring a typecast.  So, just silence lint.
 #[allow(trivial_numeric_casts)]
@@ -76,18 +79,24 @@ fn mode_from_kind_and_perm(kind: FileType, perm: u16) -> u32 {
 /// Returns a fuse_attr from FileAttr
 #[cfg(target_os = "macos")]
 fn fuse_attr_from_attr(attr: &FileAttr) -> fuse_attr {
+    // FIXME: unwrap may panic, use unwrap_or((0, 0)) or return a result instead?
+    let (atime_secs, atime_nanos) = time_from_system_time(&attr.atime).unwrap();
+    let (mtime_secs, mtime_nanos) = time_from_system_time(&attr.mtime).unwrap();
+    let (ctime_secs, ctime_nanos) = time_from_system_time(&attr.ctime).unwrap();
+    let (crtime_secs, crtime_nanos) = time_from_system_time(&attr.crtime).unwrap();
+
     fuse_attr {
         ino: attr.ino,
         size: attr.size,
         blocks: attr.blocks,
-        atime: attr.atime.sec,
-        mtime: attr.mtime.sec,
-        ctime: attr.ctime.sec,
-        crtime: attr.crtime.sec,
-        atimensec: attr.atime.nsec,
-        mtimensec: attr.mtime.nsec,
-        ctimensec: attr.ctime.nsec,
-        crtimensec: attr.crtime.nsec,
+        atime: atime_secs,
+        mtime: mtime_secs,
+        ctime: ctime_secs,
+        crtime: crtime_secs,
+        atimensec: atime_nanos,
+        mtimensec: mtime_nanos,
+        ctimensec: ctime_nanos,
+        crtimensec: crtime_nanos,
         mode: mode_from_kind_and_perm(attr.kind, attr.perm),
         nlink: attr.nlink,
         uid: attr.uid,
@@ -102,16 +111,21 @@ fn fuse_attr_from_attr(attr: &FileAttr) -> fuse_attr {
 /// Returns a fuse_attr from FileAttr
 #[cfg(not(target_os = "macos"))]
 fn fuse_attr_from_attr(attr: &FileAttr) -> fuse_attr {
+    // FIXME: unwrap may panic, use unwrap_or((0, 0)) or return a result instead?
+    let (atime_secs, atime_nanos) = time_from_system_time(&attr.atime).unwrap();
+    let (mtime_secs, mtime_nanos) = time_from_system_time(&attr.mtime).unwrap();
+    let (ctime_secs, ctime_nanos) = time_from_system_time(&attr.ctime).unwrap();
+
     fuse_attr {
         ino: attr.ino,
         size: attr.size,
         blocks: attr.blocks,
-        atime: attr.atime.sec,
-        mtime: attr.mtime.sec,
-        ctime: attr.ctime.sec,
-        atimensec: attr.atime.nsec,
-        mtimensec: attr.mtime.nsec,
-        ctimensec: attr.ctime.nsec,
+        atime: atime_secs,
+        mtime: mtime_secs,
+        ctime: ctime_secs,
+        atimensec: atime_nanos,
+        mtimensec: mtime_nanos,
+        ctimensec: ctime_nanos,
         mode: mode_from_kind_and_perm(attr.kind, attr.perm),
         nlink: attr.nlink,
         uid: attr.uid,
@@ -130,7 +144,7 @@ pub struct ReplyRaw<T> {
     /// Unique id of the request to reply to
     unique: u64,
     /// Closure to call for sending the reply
-    sender: Option<Box<ReplySender>>,
+    sender: Option<Box<dyn ReplySender>>,
     /// Marker for being able to have T on this struct (which enforces
     /// reply types to send the correct type of data)
     marker: PhantomData<T>,
@@ -160,11 +174,6 @@ impl<T> ReplyRaw<T> {
             sendbytes.extend(bytes);
             sender.send(&sendbytes);
         });
-    }
-
-    fn splice(&mut self, from: RawFd, size: usize) {
-        let sender = self.sender.take().unwrap();
-        sender.splice(from, size);
     }
 
     /// Reply to a request with the given type
@@ -221,64 +230,18 @@ impl ReplyEmpty {
 #[derive(Debug)]
 pub struct ReplyRead {
     reply: ReplyRaw<()>,
-    read_pipe_fd: RawFd,
-    write_pipe_fd: RawFd,
     unique: u64
 }
 
 impl ReplyRead {
     /// Create a new reply for a read request
-    pub fn new<S: ReplySender>(unique: u64, sender: S, read_pipe_fd: RawFd, write_pipe_fd: RawFd) -> ReplyRead {
-        ReplyRead { reply: Reply::new(unique, sender), read_pipe_fd: read_pipe_fd, write_pipe_fd: write_pipe_fd, unique: unique }
+    pub fn new<S: ReplySender>(unique: u64, sender: S) -> ReplyRead {
+        ReplyRead { reply: Reply::new(unique, sender), unique: unique }
     }
 
     /// Reply to a request with the given data
     pub fn data(mut self, data: &[u8]) {
         self.reply.send(0, &[data]);
-    }
-
-    /// Reply to a request with a file descriptor
-    pub fn fd(mut self, fd: RawFd, mut offset: i64, size: u32) {
-        let mut header = fuse_out_header {
-            unique: self.unique,
-            len: (mem::size_of::<fuse_out_header>() as u32 + size) as u32,
-            error: 0,
-        };
-
-        let iovec = libc::iovec {
-            iov_base: &mut header as *mut fuse_out_header as *mut c_void,
-            iov_len: mem::size_of::<fuse_out_header>() as size_t,
-        };
-
-        if let Err(err) = sys::vmsplice(self.write_pipe_fd, &iovec, 1, SPLICE_F_NONBLOCK) {
-            return self.reply.error(err.raw_os_error().unwrap());
-        }
-
-        let res = sys::splice(fd,
-                              Some(&mut offset),
-                              self.write_pipe_fd,
-                              None,
-                              size as usize,
-                              SPLICE_F_MOVE|SPLICE_F_NONBLOCK);
-
-        let actual_read = match res {
-            Err(err) => return self.reply.error(err.raw_os_error().unwrap()),
-            Ok(bytes) => bytes as usize,
-        };
-
-        // short read -> fallback to clear pipe in userspace
-        if (size as usize) != actual_read {
-            let mut out = vec![0; actual_read + mem::size_of::<fuse_out_header>()];
-            match sys::read(self.read_pipe_fd, &mut out[..(actual_read + mem::size_of::<fuse_out_header>())]) {
-                Ok(_) => {
-                    self.data(&out[mem::size_of::<fuse_out_header>()..]);
-                    return;
-                },
-                Err(err) => return self.reply.error(err.raw_os_error().unwrap()),
-            };
-        }
-
-        self.reply.splice(self.read_pipe_fd, size as usize + mem::size_of::<fuse_out_header>());
     }
 
     /// Reply to a request with the given error code
@@ -329,14 +292,14 @@ impl Reply for ReplyEntry {
 
 impl ReplyEntry {
     /// Reply to a request with the given entry
-    pub fn entry(self, ttl: &Timespec, attr: &FileAttr, generation: u64) {
+    pub fn entry(self, ttl: &Duration, attr: &FileAttr, generation: u64) {
         self.reply.ok(&fuse_entry_out {
             nodeid: attr.ino,
             generation: generation,
-            entry_valid: ttl.sec,
-            attr_valid: ttl.sec,
-            entry_valid_nsec: ttl.nsec,
-            attr_valid_nsec: ttl.nsec,
+            entry_valid: ttl.as_secs(),
+            attr_valid: ttl.as_secs(),
+            entry_valid_nsec: ttl.subsec_nanos(),
+            attr_valid_nsec: ttl.subsec_nanos(),
             attr: fuse_attr_from_attr(attr),
         });
     }
@@ -363,10 +326,10 @@ impl Reply for ReplyAttr {
 
 impl ReplyAttr {
     /// Reply to a request with the given attribute
-    pub fn attr(self, ttl: &Timespec, attr: &FileAttr) {
+    pub fn attr(self, ttl: &Duration, attr: &FileAttr) {
         self.reply.ok(&fuse_attr_out {
-            attr_valid: ttl.sec,
-            attr_valid_nsec: ttl.nsec,
+            attr_valid: ttl.as_secs(),
+            attr_valid_nsec: ttl.subsec_nanos(),
             dummy: 0,
             attr: fuse_attr_from_attr(attr),
         });
@@ -397,12 +360,15 @@ impl Reply for ReplyXTimes {
 #[cfg(target_os = "macos")]
 impl ReplyXTimes {
     /// Reply to a request with the given xtimes
-    pub fn xtimes(self, bkuptime: Timespec, crtime: Timespec) {
+    pub fn xtimes(self, bkuptime: SystemTime, crtime: SystemTime) {
+        // FIXME: unwrap may panic, use unwrap_or((0, 0)) or return a result instead?
+        let (bkuptime_secs, bkuptime_nanos) = time_from_system_time(&bkuptime).unwrap();
+        let (crtime_secs, crtime_nanos) = time_from_system_time(&crtime).unwrap();
         self.reply.ok(&fuse_getxtimes_out {
-            bkuptime: bkuptime.sec,
-            crtime: crtime.sec,
-            bkuptimensec: bkuptime.nsec,
-            crtimensec: crtime.nsec,
+            bkuptime: bkuptime_secs,
+            crtime: crtime_secs,
+            bkuptimensec: bkuptime_nanos,
+            crtimensec: crtime_nanos,
         });
     }
 
@@ -526,14 +492,14 @@ impl Reply for ReplyCreate {
 
 impl ReplyCreate {
     /// Reply to a request with the given entry
-    pub fn created(self, ttl: &Timespec, attr: &FileAttr, generation: u64, fh: u64, flags: u32) {
+    pub fn created(self, ttl: &Duration, attr: &FileAttr, generation: u64, fh: u64, flags: u32) {
         self.reply.ok(&(fuse_entry_out {
             nodeid: attr.ino,
             generation: generation,
-            entry_valid: ttl.sec,
-            attr_valid: ttl.sec,
-            entry_valid_nsec: ttl.nsec,
-            attr_valid_nsec: ttl.nsec,
+            entry_valid: ttl.as_secs(),
+            attr_valid: ttl.as_secs(),
+            entry_valid_nsec: ttl.subsec_nanos(),
+            attr_valid_nsec: ttl.subsec_nanos(),
             attr: fuse_attr_from_attr(attr),
         }, fuse_open_out {
             fh: fh,
@@ -686,7 +652,7 @@ impl ReplyDirectory {
             let p = self.data.as_mut_ptr().offset(self.data.len() as isize);
             let pdirent: *mut fuse_dirent = mem::transmute(p);
             (*pdirent).ino = ino;
-            (*pdirent).off = offset;
+            (*pdirent).off = offset as u64;
             (*pdirent).namelen = name.len() as u32;
             (*pdirent).typ = mode_from_kind_and_perm(kind, 0) >> 12;
             let p = p.offset(mem::size_of_val(&*pdirent) as isize);
@@ -731,7 +697,7 @@ impl ReplyDirectoryPlus {
     /// Add an entry to the directory reply buffer. Returns true if the buffer is full.
     /// A transparent offset value can be provided for each entry. The kernel uses these
     /// value to request the next entries in further readdir calls
-    pub fn add<T: AsRef<OsStr>>(&mut self, ino: u64, offset: i64, name: T, ttl: &Timespec, attr: &FileAttr, generation: u64) -> bool {
+    pub fn add<T: AsRef<OsStr>>(&mut self, ino: u64, offset: i64, name: T, ttl: &Duration, attr: &FileAttr, generation: u64) -> bool {
         let name = name.as_ref().as_bytes();
         let entlen = mem::size_of::<fuse_direntplus>() + name.len();
         let entsize = (entlen + mem::size_of::<u64>() - 1) & !(mem::size_of::<u64>() - 1); // 64bit align
@@ -744,16 +710,16 @@ impl ReplyDirectoryPlus {
             (*pdirentplus).entry_out = fuse_entry_out {
                 nodeid: attr.ino,
                 generation: generation,
-                entry_valid: ttl.sec,
-                attr_valid: ttl.sec,
-                entry_valid_nsec: ttl.nsec,
-                attr_valid_nsec: ttl.nsec,
+                entry_valid: ttl.as_secs(),
+                attr_valid: ttl.as_secs(),
+                entry_valid_nsec: ttl.subsec_nanos(),
+                attr_valid_nsec: ttl.subsec_nanos(),
                 attr: fuse_attr_from_attr(attr),
             };
 
             let pdirent: *mut fuse_dirent = &mut (*pdirentplus).dirent;
             (*pdirent).ino = ino;
-            (*pdirent).off = offset;
+            (*pdirent).off = offset as u64;
             (*pdirent).namelen = name.len() as u32;
             (*pdirent).typ = mode_from_kind_and_perm(attr.kind, 0) >> 12;
 
@@ -844,14 +810,14 @@ impl ReplyLseek {
 mod test {
     use std::thread;
     use std::sync::mpsc::{channel, Sender};
-    use time::Timespec;
+    use std::time::{Duration, UNIX_EPOCH};
     use super::as_bytes;
     use super::{Reply, ReplyRaw, ReplyEmpty, ReplyData, ReplyEntry, ReplyAttr, ReplyOpen};
     use super::{ReplyWrite, ReplyStatfs, ReplyCreate, ReplyLock, ReplyBmap, ReplyDirectory};
     use super::ReplyXattr;
     #[cfg(target_os = "macos")]
     use super::ReplyXTimes;
-    use {FileType, FileAttr};
+    use crate::{FileType, FileAttr};
 
     #[allow(dead_code)]
     #[repr(C)]
@@ -954,8 +920,8 @@ mod test {
                 vec![
                     vec![0xa0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  0xef, 0xbe, 0xad, 0xde, 0x00, 0x00, 0x00, 0x00],
                     vec![0x11, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  0xaa, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                         0x34, 0x12, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  0x34, 0x12, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                         0x78, 0x56, 0x00, 0x00, 0x78, 0x56, 0x00, 0x00,  0x11, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                         0x65, 0x87, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  0x65, 0x87, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                         0x21, 0x43, 0x00, 0x00, 0x21, 0x43, 0x00, 0x00,  0x11, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
                          0x22, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  0x33, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
                          0x34, 0x12, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  0x34, 0x12, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
                          0x34, 0x12, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  0x34, 0x12, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -967,8 +933,8 @@ mod test {
                 vec![
                     vec![0x90, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  0xef, 0xbe, 0xad, 0xde, 0x00, 0x00, 0x00, 0x00],
                     vec![0x11, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  0xaa, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                         0x34, 0x12, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  0x34, 0x12, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                         0x78, 0x56, 0x00, 0x00, 0x78, 0x56, 0x00, 0x00,  0x11, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                         0x65, 0x87, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  0x65, 0x87, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                         0x21, 0x43, 0x00, 0x00, 0x21, 0x43, 0x00, 0x00,  0x11, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
                          0x22, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  0x33, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
                          0x34, 0x12, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  0x34, 0x12, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
                          0x34, 0x12, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  0x78, 0x56, 0x00, 0x00, 0x78, 0x56, 0x00, 0x00,
@@ -978,19 +944,19 @@ mod test {
             }
         };
         let reply: ReplyEntry = Reply::new(0xdeadbeef, sender);
-        let time = Timespec::new(0x1234, 0x5678);
+        let time = UNIX_EPOCH + Duration::new(0x1234, 0x5678);
+        let ttl = Duration::new(0x8765, 0x4321);
         let attr = FileAttr { ino: 0x11, size: 0x22, blocks: 0x33, atime: time, mtime: time, ctime: time, crtime: time,
             kind: FileType::RegularFile, perm: 0o644, nlink: 0x55, uid: 0x66, gid: 0x77, rdev: 0x88, flags: 0x99 };
-        reply.entry(&time, &attr, 0xaa);
+        reply.entry(&ttl, &attr, 0xaa);
     }
-
     #[test]
     fn reply_attr() {
         let sender = AssertSender {
             expected: if cfg!(target_os = "macos") {
                 vec![
-                    vec![0x88, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  0xef, 0xbe, 0xad, 0xde, 0x00, 0x00, 0x00, 0x00],
-                    vec![0x34, 0x12, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  0x78, 0x56, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                    vec![0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  0xef, 0xbe, 0xad, 0xde, 0x00, 0x00, 0x00, 0x00],
+                    vec![0x65, 0x87, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  0x21, 0x43, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
                          0x11, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  0x22, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
                          0x33, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  0x34, 0x12, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
                          0x34, 0x12, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  0x34, 0x12, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -1002,7 +968,7 @@ mod test {
             } else {
                 vec![
                     vec![0x78, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  0xef, 0xbe, 0xad, 0xde, 0x00, 0x00, 0x00, 0x00],
-                    vec![0x34, 0x12, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  0x78, 0x56, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                    vec![0x65, 0x87, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  0x21, 0x43, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
                          0x11, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  0x22, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
                          0x33, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  0x34, 0x12, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
                          0x34, 0x12, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  0x34, 0x12, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -1013,10 +979,11 @@ mod test {
             }
         };
         let reply: ReplyAttr = Reply::new(0xdeadbeef, sender);
-        let time = Timespec::new(0x1234, 0x5678);
+        let time = UNIX_EPOCH + Duration::new(0x1234, 0x5678);
+        let ttl = Duration::new(0x8765, 0x4321);
         let attr = FileAttr { ino: 0x11, size: 0x22, blocks: 0x33, atime: time, mtime: time, ctime: time, crtime: time,
             kind: FileType::RegularFile, perm: 0o644, nlink: 0x55, uid: 0x66, gid: 0x77, rdev: 0x88, flags: 0x99 };
-        reply.attr(&time, &attr);
+        reply.attr(&ttl, &attr);
     }
 
     #[test]
@@ -1030,7 +997,7 @@ mod test {
             ]
         };
         let reply: ReplyXTimes = Reply::new(0xdeadbeef, sender);
-        let time = Timespec::new(0x1234, 0x5678);
+        let time = UNIX_EPOCH + Duration::new(0x1234, 0x5678);
         reply.xtimes(time, time);
     }
 
@@ -1081,8 +1048,8 @@ mod test {
                 vec![
                     vec![0xb0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  0xef, 0xbe, 0xad, 0xde, 0x00, 0x00, 0x00, 0x00],
                     vec![0x11, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  0xaa, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                         0x34, 0x12, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  0x34, 0x12, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                         0x78, 0x56, 0x00, 0x00, 0x78, 0x56, 0x00, 0x00,  0x11, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                         0x65, 0x87, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  0x65, 0x87, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                         0x21, 0x43, 0x00, 0x00, 0x21, 0x43, 0x00, 0x00,  0x11, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
                          0x22, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  0x33, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
                          0x34, 0x12, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  0x34, 0x12, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
                          0x34, 0x12, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  0x34, 0x12, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -1095,8 +1062,8 @@ mod test {
                 vec![
                     vec![0xa0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  0xef, 0xbe, 0xad, 0xde, 0x00, 0x00, 0x00, 0x00],
                     vec![0x11, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  0xaa, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                         0x34, 0x12, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  0x34, 0x12, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                         0x78, 0x56, 0x00, 0x00, 0x78, 0x56, 0x00, 0x00,  0x11, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                         0x65, 0x87, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  0x65, 0x87, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                         0x21, 0x43, 0x00, 0x00, 0x21, 0x43, 0x00, 0x00,  0x11, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
                          0x22, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  0x33, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
                          0x34, 0x12, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  0x34, 0x12, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
                          0x34, 0x12, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  0x78, 0x56, 0x00, 0x00, 0x78, 0x56, 0x00, 0x00,
@@ -1107,10 +1074,11 @@ mod test {
             }
         };
         let reply: ReplyCreate = Reply::new(0xdeadbeef, sender);
-        let time = Timespec::new(0x1234, 0x5678);
+        let time = UNIX_EPOCH + Duration::new(0x1234, 0x5678);
+        let ttl = Duration::new(0x8765, 0x4321);
         let attr = FileAttr { ino: 0x11, size: 0x22, blocks: 0x33, atime: time, mtime: time, ctime: time, crtime: time,
             kind: FileType::RegularFile, perm: 0o644, nlink: 0x55, uid: 0x66, gid: 0x77, rdev: 0x88, flags: 0x99 };
-        reply.created(&time, &attr, 0xaa, 0xbb, 0xcc);
+        reply.created(&ttl, &attr, 0xaa, 0xbb, 0xcc);
     }
 
     #[test]

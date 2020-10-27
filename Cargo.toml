@@ -1,8 +1,8 @@
 [package]
 name = "cntr-fuse"
-version = "0.3.6"
+edition = "2018"
+version = "0.4.0"
 authors = ["Mic92"]
-build = "build.rs"
 description = "Rust library for filesystems in userspace (FUSE) (fork with functionality needed for the cntr project)"
 homepage = "https://github.com/Mic92/cntr-fuse"
 repository = "https://github.com/Mic92/cntr-fuse"
@@ -11,21 +11,31 @@ keywords = ["fuse", "filesystem", "system", "bindings"]
 categories = ["api-bindings", "filesystem"]
 license = "MIT"
 
-[build-dependencies]
-pkg-config = "0.3"
+[workspace]
+members = [".", "fuse-abi", "fuse-sys"]
+
+[badges]
+cirrus-ci = { repository = "zargony/fuse-rs" }
+github = { repository = "zargony/fuse-rs" }
 
 [dependencies]
-libc = "0.2"
-log = "0.3"
-time = "0.1"
-thread-scoped = "1"
+fuse-abi = { path = "./fuse-abi", version = "=0.4.0-dev" }
+fuse-sys = { path = "./fuse-sys", version = "=0.4.0-dev" }
+libc = "0.2.51"
+log = "0.4.6"
+thread-scoped = "1.0.2"
 
 [dev-dependencies]
-env_logger = "0.3"
-
-[lib]
-name = "fuse"
-path = "src/lib.rs"
+env_logger = "0.6.0"
 
 [features]
+default = ["libfuse"]
 libfuse = []
+
+[[example]]
+name = "hello"
+required-features = ["libfuse"]
+
+[[example]]
+name = "null"
+required-features = ["libfuse"]
