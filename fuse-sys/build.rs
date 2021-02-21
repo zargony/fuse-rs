@@ -1,8 +1,4 @@
-#[cfg(not(target_os = "macos"))]
 const LIBFUSE_NAME: &str = "fuse";
-
-#[cfg(target_os = "macos")]
-const LIBFUSE_NAME: &str = "osxfuse";
 
 fn main() {
     pkg_config::Config::new()
