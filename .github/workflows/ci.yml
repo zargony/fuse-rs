@@ -21,7 +21,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libfuse-dev pkg-config
       - name: Install FUSE (macOS)
         if: startsWith(matrix.os, 'macos')
-        run: brew update && brew install pkg-config && brew tap homebrew/cask && brew cask install osxfuse
+        run: brew update && brew install pkg-config && brew tap homebrew/cask && brew install --cask macfuse
       - name: Install Rust toolchain
         uses: actions-rs/toolchain@v1
         with:
