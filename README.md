@@ -62,7 +62,7 @@ Installer packages can be downloaded from the [FUSE for macOS homepage][FUSE for
 To install using [Homebrew]:
 
 ```sh
-brew cask install osxfuse
+brew cask install macfuse
 ```
 
 To install `pkg-config` (required for building only):
