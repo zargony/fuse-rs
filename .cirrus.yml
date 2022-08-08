@@ -30,7 +30,7 @@ task:
     folder: $CARGO_HOME/registry
     fingerprint_script: cat Cargo.lock || echo ""
   setup_script:
-    - brew install rust clang gcc
+    - brew install rust gcc
     - brew install --cask macfuse
   build_script:
     - . $HOME/.cargo/env
