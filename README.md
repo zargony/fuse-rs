@@ -85,7 +85,7 @@ Put this in your `Cargo.toml`:
 
 ```toml
 [dependencies]
-fuse = "0.4"
+fuse = "0.3.1"
 ```
 
 To create a new filesystem, implement the trait `fuse::Filesystem`. See the [documentation] for details or the `examples` directory for some basic examples.
